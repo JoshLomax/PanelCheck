@@ -1,96 +1,134 @@
-PanelCheck for Mac
-================
+# PanelCheck
 
--   [FYI](#fyi)
--   [Windows ?](#windows)
--   [Installation](#installation)
-    -   [Requirements](#requirements)
-    -   [Download and your first launch](#download-and-your-first-launch)
--   [A minimal example](#a-minimal-example)
-    -   [Import data](#import-data)
-    -   [Plots](#plots)
-        -   [Univariate - Profile plots](#univariate---profile-plots)
-        -   [Multivariate - Tucker-1 plots](#multivariate---tucker-1-plots)
-        -   [Consensus - PCA scores](#consensus---pca-scores)
-        -   [Overall- Overview plot](#overall--overview-plot)
-        -   [Export a plot](#export-a-plot)
+> Sensory panel performance analysis — original macOS app extended with a full R translation.
 
-FYI
-===
+![R](https://img.shields.io/badge/R-%3E%3D4.1-276DC3?logo=r&logoColor=white)
+![Platform](https://img.shields.io/badge/platform-RStudio-75AADB?logo=rstudio&logoColor=white)
+![License](https://img.shields.io/badge/license-GPL--2-lightgrey)
+![Status](https://img.shields.io/badge/status-active-brightgreen)
 
-This version of PanelCheck is unpolished. By this is meant that all the features Regarding the actual data-analysis works but miscellaneous functionality such as the *about section* or *help section* might not function as desired.
+---
 
-Windows ?
-=========
+## Overview
 
-If you are using a windows mashine, please use PanelCheck distributed here <http://www.panelcheck.com/Home/panelcheck_downloads>
+**PanelCheck** is a sensory panel analysis tool originally developed as a macOS desktop application (Python 2.7 + wxPython). This repository extends the original with a full **R translation** of all key statistical analyses, enabling reproducible, scriptable panel performance evaluation in RStudio — no GUI required.
 
-Installation
-============
+The example dataset `Data_Bread.xlsx` (8 assessors × 5 breads × 2 replicates × 10 attributes) is included and works with both the app and the R scripts.
 
-Requirements
-------------
+---
 
-You will need at least iOS **High Sierra**
+## Repository Structure
 
-Download and your first launch
-------------------------------
+```
+PanelCheck/
+├── README.md                   # This file
+├── Data_Bread.xlsx             # Example sensory panel data
+│
+├── PanelCheck.app/             # Original macOS Python application (do not modify)
+│   └── ...                     # Python 2.7 + wxPython GUI source
+│
+├── css/                        # Styling assets for the HTML report
+│   ├── style.css
+│   ├── header.html
+│   └── external-links-js.html
+│
+└── R/                          # R translation of PanelCheck analyses
+    ├── 00_load_data.R          # Data loading and validation
+    ├── 01_panel_performance.R  # ANOVA-based panel performance stats
+    ├── 02_profile_plots.R      # Profile plots per assessor per attribute
+    ├── 03_mixed_model.R        # Mixed model ANOVA + Tukey HSD + variance components
+    ├── 04_pca.R                # PCA consensus analysis (biplot, scree, loadings)
+    ├── 05_fvalue_overview.R    # F-value overview plots across all attributes
+    ├── 06_eggshell_plot.R      # Eggshell assessor performance plots
+    ├── run_all.R               # Master script — runs all analyses on a dataset
+    └── utils.R                 # Shared helper functions
+```
 
--   Download this repository
--   Unzip and place the folder somewhere meaningful on your computer ( *Not* in Downloads)
--   When you want to open the program first time, you will *NOT* be able to doubleclick. Use **Finder** to direct to the folder with the program, and then cmd+click on the icon. Then you will be prompted with this window where you hit enter.
+---
 
-From now on you will be able to simple double-click on the program to get it running.
+## R Translation
 
-A minimal example
-=================
+The `R/` folder contains a clean, modular reimplementation of all PanelCheck analyses. It is designed to be run in RStudio and prioritises **reproducibility and readability** over GUI interaction.
 
-A real toy example data [Data\_Bread.xlsx](Data_Bread.xlsx) is included. Here follows a short demonstration
+### Quick Start
 
-Import data
------------
+Install required packages (first time only):
 
-Use File &gt; Import &gt; Excel... to locate the data. Here you need to make sure that the coloumns representing *Assessors*, *Samples* and *Replicates* are correctly identified by PanelCheck, furhter you are able to de-select some of the variables in the *Import Coloumns*.
+```r
+install.packages(c("readxl", "dplyr", "tidyr", "purrr", "ggplot2",
+                   "car", "lme4", "lmerTest", "emmeans", "multcomp",
+                   "FactoMineR", "ggrepel"))
+```
 
-<img src="figs/import.png" alt="Import" width="300" />
+Run the full pipeline:
 
-When correctly mathced, hit **Accept**
+```r
+source("R/run_all.R")
+```
 
-Plots
------
+Or run individual modules:
 
-In the graphical user interface, you will find four main tabs; *Univariate*, *Multivariate*, *Consensus* and *Overall*. In each main tab, several different plots are available.The red/orange/grey frame indicates level of signifcanse related to differences between samples for the particular attribute. Try to click on the different plots e.g.
+```r
+source("R/00_load_data.R")
+data <- load_panel_data("Data_Bread.xlsx")
 
-### Univariate - Profile plots
+source("R/01_panel_performance.R")
+perf <- panel_performance(data)
+```
 
-Profile plots show individual(coloured lines) and consensus (black bold line) scoring (Y-axis) and ranking (X-axis) of samples.
+### Input Data Format
 
-<img src="figs/profileplot.png" alt="Import" width="300" />
+| Column | Type | Description |
+|--------|------|-------------|
+| `Assessor` | character | Panelist ID (e.g., AS1, AS2) |
+| `Sample` | character | Product/sample ID (e.g., Bread1) |
+| `Replicate` | numeric | Replicate number (1, 2, …) |
+| `Attr1…N` | numeric | Sensory attribute scores |
 
-### Multivariate - Tucker-1 plots
+### Analyses
 
-Select the *Overview Plot (attributes)*. This plot shows the consensus among panellists for the different attributes. Assessors grouping together in a cluster indicates good agreement between these.
+| Script | Analysis |
+|--------|----------|
+| `01_panel_performance.R` | Descriptive stats · 2-way ANOVA · discrimination · repeatability · agreement |
+| `02_profile_plots.R` | Per-assessor profiles vs. panel mean · spider chart |
+| `03_mixed_model.R` | Mixed model ANOVA · Tukey HSD · variance components |
+| `04_pca.R` | Consensus PCA biplot · scree plot · loadings |
+| `05_fvalue_overview.R` | F-value heatmap/dotplot · p-value heatmap |
 
-<img src="figs/Tucker1_attributes.png" alt="Import" width="300" />
+---
 
-### Consensus - PCA scores
+## Original macOS App
 
-This plot shows which prodcuts are perceived similar and different.
+> **Note:** The original app requires macOS High Sierra or later and is not actively maintained.
+> Windows users: download from [panelcheck.com](http://www.panelcheck.com/Home/panelcheck_downloads).
 
-<img src="figs/ConsensurPCA.png" alt="Import" width="300" />
+The app is archived in `PanelCheck.app/`. It is built on Python 2.7 and wxPython. All data-analysis features work as intended; miscellaneous features such as the *About* and *Help* sections may not function as expected.
 
-### Overall- Overview plot
+### Installation
 
-Several statistical analyses can be conducted in PanelCheck as an example, a two way anova with interactions is conducted.
+1. Download this repository
+2. Unzip and place the folder somewhere meaningful (*not* in Downloads)
+3. First launch — use **Finder** to navigate to the folder, then `cmd+click` the icon and follow the prompt
 
-Select *Overall* at the top (to the right), and select *2-way ANOVA* as analysis. This one because there are replicates. Select the *Overview Plot (F values)*. You should get something like this:
+Double-clicking will launch the app normally on subsequent runs.
 
-<img src="figs/overviewplot_F.png" alt="Import" width="300" />
+### A Minimal Example
 
-Here, the main effects (Assessor and Product) as well as their interaction, across all attributes (x-axis). The y-axis is the F-value, which indicates the level of differences with respect to the assessor or product or the combination: The higher, the larger the difference. Colors indicate the corresponding significance test p-value. A significant product/sample effect for a specific attribute tells that this attribute significantly discriminate the prodcuts/samples.
+Open `Data_Bread.xlsx` via **File › Import › Excel…** and match the Assessor, Sample, and Replicate columns. Then explore:
 
-### Export a plot
+| View | What it shows |
+|------|---------------|
+| **Univariate › Profile plots** | Individual vs. consensus scoring per attribute |
+| **Multivariate › Tucker-1** | Assessor agreement across attributes |
+| **Consensus › PCA scores** | Product similarity map |
+| **Overall › Overview Plot (F values)** | F-value summary across all attributes |
 
-On the left at the bottom of a plot there are some action icons. The *disk* is used for saving the particular plot.
+Export any plot using the **disk icon** at the bottom left of the plot panel.
 
-<img src="figs/export.png" alt="Import" width="200" />
+---
+
+## Attribution
+
+Original PanelCheck application developed by [CPHFOOD](https://github.com/CPHFOOD/PanelCheck).
+
+The R translation in this fork was developed with assistance from **Claude Code** (Anthropic), an AI-powered coding assistant.
