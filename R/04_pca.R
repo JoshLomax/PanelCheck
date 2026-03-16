@@ -125,22 +125,23 @@ run_pca <- function(df,
     rownames_to_column("Sample") %>%
     rename(x = Dim.1, y = Dim.2)
 
-  # Arrow scaling factor (fixes parenthesis bug in original example)
-  r <- min(
-    (max(ind_coords$x) - min(ind_coords$x)) /
-      (max(var_sum$x)   - min(var_sum$x)),
-    (max(ind_coords$y) - min(ind_coords$y)) /
-      (max(var_sum$y)   - min(var_sum$y))
-  )
+  # Auto-scale arrows so the longest arrow reaches `arrow_fill` of the
+  # maximum Euclidean radius of the sample points from the origin.
+  # Using radial distance (rather than per-axis ranges) handles asymmetric
+  # point clouds naturally and matches the approach used by base biplot().
+  arrow_fill  <- 0.8   # arrows extend to ~80 % of the outermost sample point
+  max_ind_r   <- max(sqrt(ind_coords$x^2 + ind_coords$y^2))
+  raw_coords  <- pca_res$var$coord[top_vars$variable, , drop = FALSE]
+  max_var_len <- max(sqrt(raw_coords[, "Dim.1"]^2 + raw_coords[, "Dim.2"]^2))
+  scale_factor <- (arrow_fill * max_ind_r) / max_var_len
 
-  # Scale arrows to 60% of the scatter plot range (matches example: r * 0.6)
-  var_coords <- pca_res$var$coord[top_vars$variable, , drop = FALSE] %>%
+  var_coords <- raw_coords %>%
     as.data.frame() %>%
     rownames_to_column("variable") %>%
     select(variable, Dim.1, Dim.2) %>%
     mutate(
-      x = r * 0.6 * Dim.1,
-      y = r * 0.6 * Dim.2
+      x = scale_factor * Dim.1,
+      y = scale_factor * Dim.2
     )
 
   # ── Sample metadata ───────────────────────────────────────────────────────

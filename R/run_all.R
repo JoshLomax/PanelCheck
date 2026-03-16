@@ -27,10 +27,10 @@
 DATA_FILE   <- "../Data_Bread.xlsx"
 
 # Where to save plots and tables (relative to this script)
-OUTPUT_DIR   <- "../../panel_check_results/GP3x3"
+OUTPUT_DIR   <- "../figs/R/"
 
 # Set TRUE to save plots as PNG files to OUTPUT_DIR
-SAVE_PLOTS   <- FALSE
+SAVE_PLOTS   <- TRUE
 
 # Set TRUE to save all result tables as an Excel workbook to OUTPUT_DIR
 SAVE_TABLES  <- TRUE

@@ -125,7 +125,7 @@ tables[["descriptive_stats_overall"]] |>
       pageLength = 15,
       scrollX    = TRUE
     ),
-    caption = "Table 2. Overall descriptive statistics per attribute (collapsed across samples)."
+    caption = "Table 2. Overall descriptive statistics per attribute."
   )
 ```
 
@@ -211,7 +211,7 @@ tables[["assessor_discrimination"]] |>
       pageLength = 15,
       scrollX    = TRUE
     ),
-    caption = "Table 5. One-way ANOVA F-values per assessor and attribute (sample discrimination)."
+    caption = "Table 5. One-way ANOVA F-values per assessor and attribute."
   )
 ```
 
@@ -229,14 +229,14 @@ knitr::include_graphics("figs/R/discrimination_bars.png")
 
 # Panel ANOVA {.tabset}
 
-A two-way ANOVA is run per attribute at the panel level using `car::Anova()` (Type II sums of squares). This decomposes variance into four effects:
+A three-way fixed-effects ANOVA is run per attribute at the panel level using `lm()` with sum-to-zero contrasts and `car::Anova()` (Type III sums of squares). All three structural terms — Sample, Assessor, and Replicate — are treated as **fixed effects** (contrast with the mixed model below, where Assessor is random). Type III SS with sum-to-zero contrasts ensures correct marginal F-tests for unbalanced designs. This decomposes variance into the following effects:
 
 - **Sample** — significant product differences (the primary goal of profiling)
 - **Assessor** — systematic differences in scale use between panellists
-- **Replicate** — variation between repeat sessions, nested within assessor; a significant effect indicates poor panel repeatability
-- **Sample × Assessor** — interaction indicating disagreement in how assessors rank samples relative to one another
+- **Replicate** — variation between repeat sessions; a significant effect indicates poor panel repeatability
+- **Sample × Assessor** — interaction indicating disagreement in how assessors rank samples relative to one another (included only when all assessor × sample cells are observed; dropped automatically for incomplete designs)
 
-F-ratios are computed as the mean square for each effect divided by the residual mean square. Significance is evaluated against an F-distribution with the corresponding degrees of freedom.
+F-ratios are computed as the marginal mean square for each effect divided by the residual mean square. Significance is evaluated against an F-distribution with the corresponding degrees of freedom.
 
 ## ANOVA F-Ratios
 
@@ -253,7 +253,7 @@ tables[["Table6_anova_Fratios"]] |>
       pageLength = 15,
       scrollX    = TRUE
     ),
-    caption = "Table 6. Two-way ANOVA F-ratios per attribute (Sample, Assessor, Replicate, Sample × Assessor). F-ratios computed via Type II sums of squares (car::Anova())."
+    caption = "Table 6. Three-way fixed-effects ANOVA F-ratios per attribute (wide format). Each cell shows the rounded F-ratio and significance stars for the Sample, Panellist, and Replicate main effects. See Table 7 for full SS, df, MS, and interaction term detail."
   )
 ```
 
@@ -274,7 +274,7 @@ tables[["panel_anova"]] |>
       pageLength = 15,
       scrollX    = TRUE
     ),
-    caption = "Table 7. Full two-way ANOVA results per attribute."
+    caption = "Table 7. Three-way fixed-effects ANOVA results in long format — one row per effect, reporting SS, df, MS, F, and p per attribute. Includes the Sample × Assessor interaction where design is complete."
   )
 ```
 
@@ -298,7 +298,7 @@ knitr::include_graphics("figs/R/fvalue_dotplot.png")
 
 ## P-Value Heatmap
 
-The p-value heatmap highlights which attribute–effect combinations are statistically significant. Each cell is labelled with a significance symbol derived from the two-way ANOVA p-value for that attribute × effect combination.
+The p-value heatmap highlights which attribute–effect combinations are statistically significant. Each cell is labelled with a significance symbol derived from the three-way fixed-effects ANOVA p-value for that attribute × effect combination.
 
 ```{r pvalue-heatmap, out.width="90%"}
 knitr::include_graphics("figs/R/pvalue_heatmap.png")
@@ -316,7 +316,7 @@ knitr::include_graphics("figs/R/panel_anova_fvalues.png")
 
 ## Repeatability ANOVA
 
-Repeatability is evaluated using a two-way ANOVA (Sample + Replicate) per assessor per attribute. A significant **Replicate** effect indicates inconsistency across repeat sessions, suggesting poor repeatability for that assessor–attribute combination.
+Repeatability is evaluated using a two-way additive fixed-effects ANOVA (value ~ Sample + Replicate, Type III SS) fitted separately for each assessor × attribute combination. No Sample × Replicate interaction is included — with typically only two replicates this term cannot be estimated reliably. A significant **Sample** effect confirms the assessor discriminates between products; a significant **Replicate** effect indicates session-to-session inconsistency (poor repeatability).
 
 ```{r repeatability}
 tables[["repeatability_anova"]] |>
@@ -331,7 +331,7 @@ tables[["repeatability_anova"]] |>
       pageLength = 15,
       scrollX    = TRUE
     ),
-    caption = "Table 8. Repeatability ANOVA (Sample + Replicate effects) per assessor and attribute."
+    caption = "Table 8. Repeatability ANOVA results per assessor and attribute, reporting F and p for the Sample and Replicate effects."
   )
 ```
 
@@ -403,7 +403,7 @@ score ~ Sample + (1 | Assessor) + (1 | Assessor:Replicate) + (1 | Assessor:Sampl
 
 ## Fixed Effects
 
-The fixed effects table reports the estimated sample means, standard errors, t-values, and p-values for each attribute. A significant Sample effect confirms that the panel reliably distinguishes between products on that attribute.
+The fixed effects table reports the **F-statistic and p-value for the overall Sample effect** per attribute, derived from the mixed model using Satterthwaite denominator df approximation (lmerTest). This is an omnibus test of whether any sample differences exist — it does not identify which specific samples differ (see the Tukey HSD section for pairwise comparisons). A significant result confirms the panel reliably distinguishes between products on that attribute.
 
 ```{r mixed-fixed}
 tables[["mixed_model_fixed"]] |>
@@ -411,7 +411,7 @@ tables[["mixed_model_fixed"]] |>
   gt() |>
   tab_header(
     title    = "Table 10. Mixed Model Fixed Effects",
-    subtitle = "Sample effect estimates per attribute"
+    subtitle = "F-test statistics for the Sample effect per attribute (Satterthwaite df)"
   ) |>
   fmt_number(decimals = 2) |>
   tab_style(
