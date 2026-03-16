@@ -142,8 +142,14 @@ mixed_model_anova <- function(df, verbose = TRUE) {
 #' Uses emmeans to estimate marginal means and applies Tukey adjustment.
 #' Returns pairwise contrasts AND a compact letter display (CLD) for each attribute.
 #'
-#' @param mm      Output of mixed_model_anova()
-#' @param alpha   Significance threshold for CLD groupings (default 0.05)
+#' Large designs (>50 samples) produce n*(n-1)/2 pairwise tests — this scales
+#' quadratically and can take hours or exhaust memory. The max_samples guard
+#' catches this early and returns empty results with a clear warning.
+#'
+#' @param mm          Output of mixed_model_anova()
+#' @param alpha       Significance threshold for CLD groupings (default 0.05)
+#' @param max_samples Maximum number of sample levels before aborting (default 50).
+#'                    Set to Inf to override the guard and run regardless.
 #' @return A named list:
 #'   $contrasts  - All pairwise comparisons: Attribute | contrast | estimate | SE | df | t | p_adj | sig
 #'   $cld        - Compact letter display:   Attribute | Sample | emmean | SE | .group
@@ -152,8 +158,40 @@ mixed_model_anova <- function(df, verbose = TRUE) {
 #' @examples
 #' thsd <- tukey_hsd(mm)
 #' print(thsd$cld)
-tukey_hsd <- function(mm, alpha = 0.05) {
+tukey_hsd <- function(mm, alpha = 0.05, max_samples = 50) {
   if (length(mm$models) == 0) stop("No fitted models found in mm$models.")
+
+  # ── Sample-count guard ────────────────────────────────────────────────────
+  # Tukey HSD pairwise comparisons scale as n*(n-1)/2.  With >50 samples this
+  # creates >1,225 tests; with 210 samples it creates 21,945.  multcomp::cld()
+  # can hang or fail at that scale.  Bail out early with a clear message.
+  n_samples <- tryCatch(
+    nlevels(mm$models[[1]]@frame[["Sample"]]),
+    error = function(e) 0L
+  )
+  if (n_samples > max_samples) {
+    n_pairs <- choose(n_samples, 2)
+    # Use stop() so .try_step() in run_all.R catches this as a skip and
+    # returns NULL, preventing downstream plot functions from being called
+    # with empty data. The reason is logged in the skip summary.
+    stop(
+      "tukey_hsd() skipped: ", n_samples, " sample levels detected ",
+      "(", n_pairs, " pairwise comparisons). ",
+      "max_samples = ", max_samples, ". Set max_samples = Inf to override. ",
+      "Consider filtering to a subset of samples before calling tukey_hsd()."
+    )
+    empty <- tibble(Attribute = character(), contrast = character(),
+                    estimate = double(), SE = double(), df = double(),
+                    t_ratio = double(), p_adj = double(), sig = character())
+    return(list(
+      contrasts = empty,
+      emmeans   = tibble(Attribute = character(), Sample = character(),
+                         emmean = double(), SE = double(),
+                         lower_CL = double(), upper_CL = double()),
+      cld       = tibble(Attribute = character(), Sample = character(),
+                         emmean = double(), SE = double(), letter = character())
+    ))
+  }
 
   contrast_rows <- list()
   cld_rows      <- list()

@@ -21,6 +21,7 @@
 #   print(perf$summary)
 
 suppressPackageStartupMessages({
+  library(car)      # Type III SS for unbalanced designs
   library(dplyr)
   library(tidyr)
   library(purrr)
@@ -68,10 +69,11 @@ descriptive_stats <- function(df, by_sample = TRUE) {
 
 # ── 1. Panel ANOVA ────────────────────────────────────────────────────────────
 
-#' Simple 3-factor ANOVA per attribute: Sample + Assessor + Replicate
+#' 3-factor ANOVA per attribute: Sample + Assessor + Replicate (Type III SS)
 #'
-#' Tests all three main effects against the pooled residual — the model used
-#' to produce Table 6 (F-ratios for Sample, Panellist, Replicate).
+#' Uses Type III (marginal) sums of squares via car::Anova() so that F-ratios
+#' are correct for unbalanced designs (unequal cell counts across assessors or
+#' samples). Model fitted with sum-to-zero contrasts as required for Type III SS.
 #' Includes the Sample:Assessor interaction to assess panel agreement.
 #'
 #' @param df Data frame from load_panel_data()
@@ -96,18 +98,32 @@ panel_anova <- function(df) {
     has_reps <- length(unique(d$Replicate)) > 1
 
     tryCatch({
-      # Simple additive model: all main effects + Sample:Assessor interaction
-      # tested against the pooled residual.  This gives F-ratios for Sample,
-      # Assessor, and (when replicates exist) Replicate — matching Table 6.
-      # A split-plot Error() model cannot F-test Assessor because Assessors are
-      # not replicated at the whole-plot level.
+      # Fit with sum-to-zero contrasts — required for unambiguous Type III SS.
+      # car::Anova(type = "III") gives correct F-ratios for unbalanced designs.
+      ctr <- list(Sample = "contr.sum", Assessor = "contr.sum",
+                  Replicate = "contr.sum")
+
+      # Include Sample:Assessor interaction only when every assessor has at
+      # least one observation for every sample.  Missing cells (common in large
+      # unbalanced panels) cause aliased coefficients and car::Anova() errors.
+      cell_counts       <- with(d, table(Sample, Assessor))
+      can_fit_interact  <- !any(cell_counts == 0)
+
       if (has_reps) {
-        fit <- aov(value ~ Sample + Assessor + Replicate + Sample:Assessor, data = d)
+        formula <- if (can_fit_interact)
+          value ~ Sample + Assessor + Replicate + Sample:Assessor
+        else
+          value ~ Sample + Assessor + Replicate
+        fit <- lm(formula, data = d, contrasts = ctr)
       } else {
-        fit <- aov(value ~ Sample + Assessor + Sample:Assessor, data = d)
+        formula <- if (can_fit_interact)
+          value ~ Sample + Assessor + Sample:Assessor
+        else
+          value ~ Sample + Assessor
+        fit <- lm(formula, data = d, contrasts = ctr[c("Sample", "Assessor")])
       }
-      sm   <- summary(fit)[[1]]
-      rows <- .parse_aov_summary(sm, attr)
+      sm   <- car::Anova(fit, type = "III")
+      rows <- .parse_car_anova(sm, attr)
       rows
     }, error = function(e) {
       tibble(Attribute = attr, Effect = "ERROR", SS = NA_real_, df = NA_integer_,
@@ -116,18 +132,20 @@ panel_anova <- function(df) {
   }) |> list_rbind()
 }
 
-# Internal: turn a standard aov summary matrix into a tibble
-.parse_aov_summary <- function(mat, attr) {
-  tbl <- as.data.frame(mat)
-  tbl$Effect <- trimws(rownames(mat))
-  tbl <- tbl[tbl$Effect != "Residuals", , drop = FALSE]
+# Internal: parse car::Anova() Type III output into a tidy tibble.
+# car::Anova returns: Sum Sq | Df | F value | Pr(>F)  (no Mean Sq column).
+# Intercept and Residuals rows are dropped; MS is computed as SS/df.
+.parse_car_anova <- function(car_out, attr) {
+  tbl <- as.data.frame(car_out)
+  tbl$Effect <- trimws(rownames(tbl))
+  tbl <- tbl[!tbl$Effect %in% c("(Intercept)", "Residuals"), , drop = FALSE]
 
   tibble(
     Attribute = attr,
     Effect    = tbl$Effect,
     SS        = tbl[["Sum Sq"]],
     df        = as.integer(tbl[["Df"]]),
-    MS        = tbl[["Mean Sq"]],
+    MS        = tbl[["Sum Sq"]] / tbl[["Df"]],
     F_value   = tbl[["F value"]],
     p_value   = tbl[["Pr(>F)"]],
     sig       = .sig_stars(tbl[["Pr(>F)"]])
@@ -262,27 +280,34 @@ repeatability_anova <- function(df) {
       }
 
       tryCatch({
-        fit <- aov(value ~ Sample + Replicate, data = d)
-        sm  <- summary(fit)[[1]]
+        # Sum-to-zero contrasts + Type III SS for correct results when
+        # an assessor has missing sample×replicate combinations.
+        fit <- lm(value ~ Sample + Replicate, data = d,
+                  contrasts = list(Sample = "contr.sum", Replicate = "contr.sum"))
+        sm  <- as.data.frame(car::Anova(fit, type = "III"))
+        sm$Effect <- trimws(rownames(sm))
 
+        effects_only <- sm[!sm$Effect %in% c("(Intercept)", "Residuals"), ]
         rows <- tibble(
           Assessor  = ass,
           Attribute = attr,
-          Effect    = trimws(rownames(sm)[rownames(sm) != "Residuals"]),
-          SS        = sm[rownames(sm) != "Residuals", "Sum Sq"],
-          df        = as.integer(sm[rownames(sm) != "Residuals", "Df"]),
-          MS        = sm[rownames(sm) != "Residuals", "Mean Sq"],
-          F_value   = sm[rownames(sm) != "Residuals", "F value"],
-          p_value   = sm[rownames(sm) != "Residuals", "Pr(>F)"],
-          sig       = .sig_stars(sm[rownames(sm) != "Residuals", "Pr(>F)"])
+          Effect    = effects_only$Effect,
+          SS        = effects_only[["Sum Sq"]],
+          df        = as.integer(effects_only[["Df"]]),
+          MS        = effects_only[["Sum Sq"]] / effects_only[["Df"]],
+          F_value   = effects_only[["F value"]],
+          p_value   = effects_only[["Pr(>F)"]],
+          sig       = .sig_stars(effects_only[["Pr(>F)"]])
         )
 
         # Append residual row (MS_residual = repeatability error variance)
-        res_row <- sm["Residuals", ]
+        res_row <- sm[sm$Effect == "Residuals", ]
+        res_ss  <- res_row[["Sum Sq"]]
+        res_df  <- as.integer(res_row[["Df"]])
         bind_rows(rows,
           tibble(Assessor = ass, Attribute = attr, Effect = "Residual",
-                 SS = res_row[["Sum Sq"]], df = as.integer(res_row[["Df"]]),
-                 MS = res_row[["Mean Sq"]], F_value = NA_real_,
+                 SS = res_ss, df = res_df,
+                 MS = res_ss / res_df, F_value = NA_real_,
                  p_value = NA_real_, sig = NA_character_)
         )
       }, error = function(e) {

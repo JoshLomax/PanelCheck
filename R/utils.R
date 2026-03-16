@@ -123,13 +123,15 @@ palette_attributes <- function(n) {
   RColorBrewer::brewer.pal(max(n, 3), "Spectral")[seq_len(n)]
 }
 
-#' Sample colour scale — Set2 (up to 8 soft qualitative colours)
+#' Sample colour scale — scales gracefully to any number of samples.
 #'
-#' Used when fills/lines are coloured by sample/product.
+#' Uses Set2 for ≤8 samples; interpolates via colorRampPalette for larger sets
+#' so that plots with many products still render (colours will be less distinct).
 #' @param n Number of colours needed
 palette_samples <- function(n) {
-  if (n > 8) stop("Set2 supports up to 8 colours; reduce the number of samples shown.")
-  RColorBrewer::brewer.pal(max(n, 3), "Set2")[seq_len(n)]
+  base_pal <- RColorBrewer::brewer.pal(8, "Set2")
+  if (n <= 8) base_pal[seq_len(max(n, 3))][seq_len(n)]
+  else        colorRampPalette(base_pal)(n)
 }
 
 #' Performance colour scale — RdYlGn traffic light
@@ -138,6 +140,64 @@ palette_samples <- function(n) {
 palette_performance <- function() {
   pal <- RColorBrewer::brewer.pal(3, "RdYlGn")
   c("Good" = pal[3], "Moderate" = pal[2], "Poor" = pal[1])
+}
+
+
+# ── Analysis skip log ──────────────────────────────────────────────────────────
+#
+# A lightweight mutable log that accumulates the names and reasons of any steps
+# that error out during run_all.R, then prints them all at the very end.
+#
+# Usage in run_all.R:
+#   .reset_skip_log()                          # once, at the top
+#   x <- .try_step("My step", some_fn(data))  # wraps any expression
+#   .print_skip_summary()                      # once, at the bottom
+#
+# .try_step() returns the expression result on success, or NULL (invisibly) on
+# error, so downstream code can guard with:  if (!is.null(x)) { ... }
+
+.log_env <- new.env(parent = emptyenv())
+.log_env$skips <- list()
+
+#' Reset the skip log — call once at the start of each run_all.R run.
+.reset_skip_log <- function() {
+  .log_env$skips <- list()
+  invisible(NULL)
+}
+
+#' Wrap an expression: evaluate it; on error log a skip and return NULL.
+#'
+#' @param step_name Short label for this step (shown in the end-of-run summary).
+#' @param expr      Expression to evaluate (passed as a lazy promise — use bare
+#'                  code, not a quoted string).
+#' @param reason    Optional override message for the skip reason. Defaults to
+#'                  the error message from the condition.
+#' @return Result of \code{expr} on success; \code{NULL} invisibly on error.
+.try_step <- function(step_name, expr, reason = NULL) {
+  tryCatch(
+    expr,
+    error = function(e) {
+      msg <- if (!is.null(reason)) reason else conditionMessage(e)
+      .log_env$skips <- c(.log_env$skips, list(list(step = step_name, reason = msg)))
+      message(sprintf("  ! Skipped '%s': %s", step_name, msg))
+      invisible(NULL)
+    }
+  )
+}
+
+#' Print a summary of all steps skipped during the current run.
+.print_skip_summary <- function() {
+  n <- length(.log_env$skips)
+  cat("\n--- Run summary ---\n")
+  if (n == 0) {
+    cat("  All steps completed successfully.\n")
+  } else {
+    cat(sprintf("  %d step(s) were skipped:\n\n", n))
+    for (s in .log_env$skips) {
+      cat(sprintf("    [SKIPPED] %s\n", s$step))
+      cat(sprintf("      Reason : %s\n\n", s$reason))
+    }
+  }
 }
 
 

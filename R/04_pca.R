@@ -263,7 +263,7 @@ plot_pca_biplot <- function(pca,
     point_aes <- modifyList(point_aes, aes(shape = .data[[shape_var]]))
 
   n_samps  <- nrow(ind)
-  samp_pal <- palette_samples(min(n_samps, 8))
+  samp_pal <- palette_samples(n_samps)
 
   p <- p +
     geom_point(
@@ -278,7 +278,7 @@ plot_pca_biplot <- function(pca,
   if (!is.null(fill_var) && fill_var %in% names(ind)) {
     n_lvls <- length(unique(ind[[fill_var]]))
     p <- p + scale_fill_manual(
-      values = palette_samples(min(n_lvls, 8)),
+      values = palette_samples(n_lvls),
       name   = fill_var
     )
   } else {

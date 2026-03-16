@@ -9,20 +9,33 @@
 #   3. Source this script:
 #        source("run_all.R")
 #   4. Results appear in the console; plots open in the RStudio Plots pane.
-#      Set SAVE_PLOTS = TRUE to write PNG files to the output folder.
+#      Set SAVE_PLOTS = TRUE  to write PNG files to the output folder.
+#      Set SAVE_TABLES = TRUE to write the results workbook (.xlsx).
+#
+# ERROR HANDLING:
+#   Each step is wrapped in .try_step(). If a step errors (e.g. too many
+#   samples for a particular plot, aliased model coefficients, etc.) it is
+#   skipped gracefully and the reason is accumulated in a log. All skipped
+#   steps are printed together at the very end of the run.
 #
 # ─────────────────────────────────────────────────────────────────────────────
+# See README.md for data pre-processing guidance and folder setup instructions.
 
 # ══ USER SETTINGS ════════════════════════════════════════════════════════════
 
 # Path to your data file (relative to this script, or use an absolute path)
 DATA_FILE   <- "../Data_Bread.xlsx"
 
-# Where to save plots and CSV output (relative to this script)
-OUTPUT_DIR  <- "../figs/R"
+# Where to save plots and tables (relative to this script)
+OUTPUT_DIR   <- "../../panel_check_results/GP3x3"
 
-# Set TRUE to save plots as PNG files
-SAVE_PLOTS  <- TRUE
+# Set TRUE to save plots as PNG files to OUTPUT_DIR
+SAVE_PLOTS   <- FALSE
+
+# Set TRUE to save all result tables as an Excel workbook to OUTPUT_DIR
+SAVE_TABLES  <- TRUE
+
+# If both FALSE the outputs will only be available in the rstudio session
 
 # Figure dimensions (inches)
 FIG_WIDTH   <- 12
@@ -58,30 +71,32 @@ suppressPackageStartupMessages({
   # lme4/lmerTest/multcomp/FactoMineR all load MASS as a transitive dependency.
   # MASS exports select() which conflicts with dplyr. Because library() won't
   # reposition a package that is already attached, we detach-and-reattach dplyr
-  # so it sits at position 2 (above MASS) on the search path. Any MASS-specific
-  # function needed directly should be called as MASS::function().
+  # so it sits at position 2 (above MASS) on the search path.
   if ("package:dplyr" %in% search()) {
     suppressWarnings(detach("package:dplyr", character.only = TRUE, unload = FALSE))
   }
   library(dplyr)
 })
 
-# Create output directory
-if (SAVE_PLOTS && !dir.exists(OUTPUT_DIR)) {
+# Create output directory if either save option is active
+if ((SAVE_PLOTS || SAVE_TABLES) && !dir.exists(OUTPUT_DIR)) {
   dir.create(OUTPUT_DIR, recursive = TRUE)
   message("Created output directory: ", normalizePath(OUTPUT_DIR))
 }
 
 .save <- function(p, filename, w = FIG_WIDTH, h = FIG_HEIGHT) {
-  if (SAVE_PLOTS) {
+  if (SAVE_PLOTS && !is.null(p)) {
     path <- file.path(OUTPUT_DIR, filename)
     ggsave(filename = path, plot = p, width = w, height = h, dpi = 300)
     message("  Saved: ", path)
   }
 }
 
+# Initialise the skip log (functions defined in utils.R)
+.reset_skip_log()
 
-# ── 1. Load data ──────────────────────────────────────────────────────────────
+
+# ── 1. Load data ───────────────────────────────────────────────────────────────
 
 cat("\n========================================\n")
 cat(" PanelCheck R — Full Analysis\n")
@@ -97,168 +112,272 @@ n_samples   <- length(unique(df$Sample))
 tables <- list()
 
 
-# ── 2. Panel performance (PRIORITY) ──────────────────────────────────────────
+# ── 2. Panel performance (PRIORITY) ───────────────────────────────────────────
 
 cat("\n--- Descriptive Statistics ---\n")
-desc <- descriptive_stats(df, by_sample = TRUE)
-print(desc, n = 20)
-tables[["descriptive_stats"]]         <- desc
-tables[["descriptive_stats_overall"]] <- descriptive_stats(df, by_sample = FALSE)
+desc <- .try_step("Descriptive statistics",
+                  descriptive_stats(df, by_sample = TRUE))
+if (!is.null(desc)) {
+  print(desc, n = 20)
+  tables[["descriptive_stats"]]         <- desc
+  tables[["descriptive_stats_overall"]] <- descriptive_stats(df, by_sample = FALSE)
+}
 
 cat("\n--- Panel Performance Statistics ---\n")
-perf <- panel_performance(df)
-print_panel_performance(perf)
+perf <- .try_step("Panel performance", panel_performance(df))
+if (!is.null(perf)) {
+  print_panel_performance(perf)
+}
 
 cat("\n--- Repeatability ANOVA (per assessor) ---\n")
-rep_anova <- repeatability_anova(df)
-rep_anova_wide <- rep_anova %>%
-  filter(Effect %in% c("Sample", "Replicate")) %>%
-  select(Assessor, Attribute, Effect, F_value, p_value, sig)
-print(tibble::as_tibble(rep_anova_wide), n = 30)
+rep_anova <- .try_step("Repeatability ANOVA", repeatability_anova(df))
+if (!is.null(rep_anova)) {
+  rep_anova_wide <- rep_anova %>%
+    filter(Effect %in% c("Sample", "Replicate")) %>%
+    select(Assessor, Attribute, Effect, F_value, p_value, sig)
+  print(tibble::as_tibble(rep_anova_wide), n = 30)
+}
 
 cat("\n--- Table 5: Panellist Performance Counts ---\n")
-perf_counts <- panel_performance_counts(perf$discrimination, rep_anova, perf$agreement)
-print(perf_counts)
+perf_counts <- if (!is.null(perf) && !is.null(rep_anova)) {
+  .try_step("Table 5: performance counts",
+            panel_performance_counts(perf$discrimination, rep_anova, perf$agreement))
+} else NULL
+if (!is.null(perf_counts)) print(perf_counts)
 
 cat("\n--- Table 6: Panel ANOVA F-ratios ---\n")
-anova_wide <- format_anova_table(perf$anova)
-print(anova_wide)
+anova_wide <- if (!is.null(perf)) {
+  .try_step("Table 6: ANOVA F-ratios", format_anova_table(perf$anova))
+} else NULL
+if (!is.null(anova_wide)) print(anova_wide)
 
-tables[["Table5_perf_counts"]]     <- perf_counts
-tables[["Table6_anova_Fratios"]]   <- anova_wide
-tables[["panel_performance"]]      <- perf$summary
-tables[["assessor_discrimination"]] <- perf$discrimination
-tables[["assessor_agreement"]]      <- perf$agreement
-tables[["panel_anova"]]             <- perf$anova
-tables[["repeatability_anova"]]     <- rep_anova
+# Store tables
+if (!is.null(perf_counts))  tables[["Table5_perf_counts"]]      <- perf_counts
+if (!is.null(anova_wide))   tables[["Table6_anova_Fratios"]]    <- anova_wide
+if (!is.null(perf)) {
+  tables[["panel_performance"]]       <- perf$summary
+  tables[["assessor_discrimination"]] <- perf$discrimination
+  tables[["assessor_agreement"]]      <- perf$agreement
+  tables[["panel_anova"]]             <- perf$anova
+}
+if (!is.null(rep_anova)) tables[["repeatability_anova"]] <- rep_anova
 
 
 # ── 3. F-value overview plots ─────────────────────────────────────────────────
 
 cat("\n--- F-value Overview Plots ---\n")
 
-p_fheat <- plot_fvalue_heatmap(perf$discrimination)
-print(p_fheat)
-.save(p_fheat, "fvalue_heatmap.png", w = 10, h = 6)
+if (!is.null(perf)) {
+  p_fheat <- .try_step("Plot: F-value heatmap",
+                        plot_fvalue_heatmap(perf$discrimination))
+  if (!is.null(p_fheat)) { print(p_fheat); .save(p_fheat, "fvalue_heatmap.png", w = 10, h = 6) }
 
-p_pval <- plot_pvalue_heatmap(perf$discrimination)
-print(p_pval)
-.save(p_pval, "pvalue_heatmap.png", w = 10, h = 6)
+  p_pval <- .try_step("Plot: p-value heatmap",
+                       plot_pvalue_heatmap(perf$discrimination))
+  if (!is.null(p_pval)) { print(p_pval); .save(p_pval, "pvalue_heatmap.png", w = 10, h = 6) }
 
-p_disc_bars <- plot_discrimination_bars(perf$discrimination)
-print(p_disc_bars)
-.save(p_disc_bars, "discrimination_bars.png", w = 8, h = 5)
+  p_disc_bars <- .try_step("Plot: discrimination bars",
+                             plot_discrimination_bars(perf$discrimination))
+  if (!is.null(p_disc_bars)) { print(p_disc_bars); .save(p_disc_bars, "discrimination_bars.png", w = 8, h = 5) }
 
-p_fdot <- plot_fvalue_dotplot(perf$discrimination, n_samples = n_samples, ncol = 4)
-print(p_fdot)
-.save(p_fdot, "fvalue_dotplot.png", w = FIG_WIDTH, h = FIG_HEIGHT)
+  p_fdot <- .try_step("Plot: F-value dotplot",
+                       plot_fvalue_dotplot(perf$discrimination, n_samples = n_samples, ncol = 4))
+  if (!is.null(p_fdot)) { print(p_fdot); .save(p_fdot, "fvalue_dotplot.png") }
 
-p_panel_anova <- plot_panel_anova(perf$anova)
-print(p_panel_anova)
-.save(p_panel_anova, "panel_anova_fvalues.png", w = 10, h = 9)
-
-
-# ── 4. Profile plots ──────────────────────────────────────────────────────────
-
-cat("\n--- Profile Plots ---\n")
-
-p_all_profiles <- plot_profiles(df, ncol = 4)
-print(p_all_profiles)
-.save(p_all_profiles, "profile_all_assessors.png", w = FIG_WIDTH, h = 10)
-
-p_means <- plot_mean_scores(df)
-print(p_means)
-.save(p_means, "panel_mean_scores.png", w = FIG_WIDTH, h = FIG_HEIGHT)
-
-p_spider <- plot_spider(df)
-print(p_spider)
-.save(p_spider, "spider_plot.png", w = 8, h = 7)
-
-# Individual assessor profiles
-for (ass in sort(unique(df$Assessor))) {
-  p_ass <- plot_assessor_profile(df, ass)
-  print(p_ass)
-  .save(p_ass, paste0("profile_", ass, ".png"), w = FIG_WIDTH, h = FIG_HEIGHT)
+  p_panel_anova <- .try_step("Plot: panel ANOVA F-values",
+                               plot_panel_anova(perf$anova))
+  if (!is.null(p_panel_anova)) { print(p_panel_anova); .save(p_panel_anova, "panel_anova_fvalues.png", w = 10, h = 9) }
 }
 
 
-# ── 5. Mixed model ANOVA + Tukey HSD ─────────────────────────────────────────
+# ── 4. Profile plots ───────────────────────────────────────────────────────────
+
+cat("\n--- Profile Plots ---\n")
+
+p_all_profiles <- .try_step("Plot: all-assessor profile",
+                              plot_profiles(df, ncol = 4))
+if (!is.null(p_all_profiles)) { print(p_all_profiles); .save(p_all_profiles, "profile_all_assessors.png", w = FIG_WIDTH, h = 10) }
+
+p_means <- .try_step("Plot: panel mean scores",
+                      plot_mean_scores(df))
+if (!is.null(p_means)) { print(p_means); .save(p_means, "panel_mean_scores.png") }
+
+p_spider <- .try_step("Plot: spider chart",
+                       plot_spider(df))
+if (!is.null(p_spider)) { print(p_spider); .save(p_spider, "spider_plot.png", w = 8, h = 7) }
+
+# Individual assessor profiles — each wrapped independently
+for (ass in sort(unique(df$Assessor))) {
+  p_ass <- .try_step(
+    paste0("Plot: assessor profile — ", ass),
+    plot_assessor_profile(df, ass)
+  )
+  if (!is.null(p_ass)) {
+    print(p_ass)
+    safe_name <- gsub("[^A-Za-z0-9_-]", "_", ass)
+    .save(p_ass, paste0("profile_", safe_name, ".png"))
+  }
+}
+
+
+# ── 5. Mixed model ANOVA + Tukey HSD ──────────────────────────────────────────
 
 cat("\n--- Mixed Model ANOVA + Tukey HSD ---\n")
 message("Fitting mixed models (this may take a moment)...")
-mm   <- mixed_model_anova(df, verbose = TRUE)
-thsd <- tukey_hsd(mm)
 
-cat("\nFixed effects (Sample F-tests):\n")
-print(mm$fixed_effects)
-cat("\nTukey HSD compact letter display:\n")
-print(tibble::as_tibble(thsd$cld), n = 50)
+mm <- .try_step("Mixed model ANOVA", mixed_model_anova(df, verbose = TRUE))
 
-p_tukey_means <- plot_tukey_means(thsd)
-print(p_tukey_means)
-.save(p_tukey_means, "tukey_means_cld.png", w = FIG_WIDTH, h = FIG_HEIGHT)
+if (!is.null(mm)) {
+  cat("\nFixed effects (Sample F-tests):\n")
+  print(mm$fixed_effects)
 
-p_tukey_heat <- plot_tukey_heatmap(thsd)
-print(p_tukey_heat)
-.save(p_tukey_heat, "tukey_heatmap.png", w = 10, h = 7)
+  thsd <- .try_step("Tukey HSD", tukey_hsd(mm))
 
-p_vc <- plot_variance_components(mm)
-print(p_vc)
-.save(p_vc, "variance_components.png", w = FIG_WIDTH, h = 6)
+  if (!is.null(thsd)) {
+    cat("\nTukey HSD compact letter display:\n")
+    print(tibble::as_tibble(thsd$cld), n = 50)
 
-tables[["mixed_model_fixed"]]  <- mm$fixed_effects
-tables[["mixed_model_random"]] <- mm$random_effects
-tables[["tukey_contrasts"]]    <- thsd$contrasts
-tables[["tukey_cld"]]          <- thsd$cld
-tables[["tukey_emmeans"]]      <- thsd$emmeans
+    p_tukey_means <- .try_step("Plot: Tukey means + CLD",
+                                plot_tukey_means(thsd))
+    if (!is.null(p_tukey_means)) { print(p_tukey_means); .save(p_tukey_means, "tukey_means_cld.png") }
+
+    p_tukey_heat <- .try_step("Plot: Tukey p-value heatmap",
+                               plot_tukey_heatmap(thsd))
+    if (!is.null(p_tukey_heat)) { print(p_tukey_heat); .save(p_tukey_heat, "tukey_heatmap.png", w = 10, h = 7) }
+
+    tables[["tukey_contrasts"]] <- thsd$contrasts
+    tables[["tukey_cld"]]       <- thsd$cld
+    tables[["tukey_emmeans"]]   <- thsd$emmeans
+  } else {
+    # thsd was skipped (e.g. too many samples) — already logged by .try_step / tukey_hsd()
+  }
+
+  p_vc <- .try_step("Plot: variance components",
+                     plot_variance_components(mm))
+  if (!is.null(p_vc)) { print(p_vc); .save(p_vc, "variance_components.png", w = FIG_WIDTH, h = 6) }
+
+  tables[["mixed_model_fixed"]]  <- mm$fixed_effects
+  tables[["mixed_model_random"]] <- mm$random_effects
+}
 
 
 # ── 6. PCA ────────────────────────────────────────────────────────────────────
 
 cat("\n--- Principal Component Analysis ---\n")
-pca <- run_pca(df)
-cat("Variance explained:\n")
-cat(sprintf("  C1: %.1f%%   C2: %.1f%%   C1+C2: %.1f%%\n",
-            pca$pct_var[1], pca$pct_var[2],
-            pca$pct_var[1] + pca$pct_var[2]))
 
-p_biplot <- plot_pca_biplot(pca)
-print(p_biplot)
-.save(p_biplot, "pca_biplot.png", w = 9, h = 7)
+pca <- .try_step("PCA", run_pca(df))
 
-p_scree <- plot_pca_scree(pca)
-print(p_scree)
-.save(p_scree, "pca_scree.png", w = 7, h = 5)
+if (!is.null(pca)) {
+  cat("Variance explained:\n")
+  cat(sprintf("  C1: %.1f%%   C2: %.1f%%   C1+C2: %.1f%%\n",
+              pca$pct_var[1], pca$pct_var[2],
+              pca$pct_var[1] + pca$pct_var[2]))
 
-p_loadings <- plot_pca_loadings(pca)
-print(p_loadings)
-.save(p_loadings, "pca_loadings.png", w = 9, h = 5)
+  p_biplot <- .try_step("Plot: PCA biplot",
+                         plot_pca_biplot(pca))
+  if (!is.null(p_biplot)) { print(p_biplot); .save(p_biplot, "pca_biplot.png", w = 9, h = 7) }
 
-tables[["pca_sample_coords"]]   <- pca$ind_coords
-tables[["pca_variable_coords"]] <- pca$var_coords
+  p_scree <- .try_step("Plot: PCA scree",
+                        plot_pca_scree(pca))
+  if (!is.null(p_scree)) { print(p_scree); .save(p_scree, "pca_scree.png", w = 7, h = 5) }
 
+  p_loadings <- .try_step("Plot: PCA loadings",
+                            plot_pca_loadings(pca))
+  if (!is.null(p_loadings)) { print(p_loadings); .save(p_loadings, "pca_loadings.png", w = 9, h = 5) }
 
-# ── 7. Write Excel output ─────────────────────────────────────────────────────
-
-if (SAVE_PLOTS) {
-  xlsx_path <- file.path(OUTPUT_DIR, "PanelCheck_results.xlsx")
-  writexl::write_xlsx(tables, path = xlsx_path)
-  message("Saved results workbook: ", xlsx_path,
-          "\n  Sheets: ", paste(names(tables), collapse = ", "))
+  tables[["pca_sample_coords"]]   <- pca$ind_coords
+  tables[["pca_variable_coords"]] <- pca$var_coords
 }
 
 
-# ── 8. Done ───────────────────────────────────────────────────────────────────
+# ── 7. Write Excel output ──────────────────────────────────────────────────────
+#
+# Strategy:
+#   1. Sanitise every table (coerce list-columns → character, factors → character).
+#   2. Try a single bulk write with writexl::write_xlsx().
+#   3. On failure, test each sheet individually in a temp file; collect the ones
+#      that pass and write those, logging any that still fail.
+
+.sanitise_df <- function(df) {
+  if (is.null(df) || !is.data.frame(df)) return(df)
+  df[] <- lapply(df, function(col) {
+    if      (is.list(col))   vapply(col, function(x) paste(x, collapse = "; "), character(1))
+    else if (is.factor(col)) as.character(col)
+    else col
+  })
+  df
+}
+
+if (SAVE_TABLES && length(tables) > 0) {
+  xlsx_path <- file.path(OUTPUT_DIR, "PanelCheck_results.xlsx")
+
+  # Sanitise all tables; truncate sheet names to Excel's 31-character limit.
+  safe_tables        <- lapply(tables, .sanitise_df)
+  names(safe_tables) <- substr(names(safe_tables), 1, 31)
+
+  # Attempt bulk write first.
+  bulk_ok <- tryCatch({
+    writexl::write_xlsx(safe_tables, path = xlsx_path)
+    TRUE
+  }, error = function(e) {
+    message("  ! Bulk xlsx write failed: ", conditionMessage(e))
+    message("    Retrying sheet by sheet...")
+    FALSE
+  })
+
+  # Fallback: test each sheet individually, keep those that succeed.
+  if (!bulk_ok) {
+    working <- list()
+    for (nm in names(safe_tables)) {
+      tmp <- tempfile(fileext = ".xlsx")
+      sheet_ok <- tryCatch({
+        writexl::write_xlsx(list(x = safe_tables[[nm]]), path = tmp)
+        TRUE
+      }, error = function(e) {
+        .log_skip(
+          paste0("Excel sheet '", nm, "'"),
+          conditionMessage(e)
+        )
+        FALSE
+      })
+      if (sheet_ok) working[[nm]] <- safe_tables[[nm]]
+    }
+
+    if (length(working) > 0) {
+      tryCatch(
+        writexl::write_xlsx(working, path = xlsx_path),
+        error = function(e) {
+          .log_skip("Excel workbook final write", conditionMessage(e))
+          message("  ! Could not write workbook: ", conditionMessage(e))
+        }
+      )
+    } else {
+      .log_skip("Excel workbook write", "No sheets could be serialised successfully")
+    }
+  }
+
+  if (file.exists(xlsx_path)) {
+    message("Saved results workbook: ", xlsx_path,
+            "\n  Sheets: ", paste(names(safe_tables), collapse = ", "))
+  }
+}
+
+
+# ── 8. Done ────────────────────────────────────────────────────────────────────
 
 cat("\n========================================\n")
 cat(" Analysis complete!\n")
-if (SAVE_PLOTS) {
+if (SAVE_PLOTS || SAVE_TABLES) {
   cat(" Outputs saved to:", normalizePath(OUTPUT_DIR), "\n")
-  cat(" Tables:  PanelCheck_results.xlsx\n")
-} else {
-  cat(" Set SAVE_PLOTS = TRUE to export plots and tables.\n")
+  if (SAVE_PLOTS)  cat("   Plots:  PNG files\n")
+  if (SAVE_TABLES) cat("   Tables: PanelCheck_results.xlsx\n")
 }
-cat("========================================\n\n")
+if (!SAVE_PLOTS)  cat(" Set SAVE_PLOTS  = TRUE to export PNG plots.\n")
+if (!SAVE_TABLES) cat(" Set SAVE_TABLES = TRUE to export the results workbook.\n")
+cat("========================================\n")
+
+# Print cumulative skip log — all steps that were bypassed this run
+.print_skip_summary()
 
 # Return the key objects invisibly so they are accessible after sourcing
-invisible(list(df = df, perf = perf))
+invisible(list(df = df, perf = perf, mm = mm, pca = pca))
