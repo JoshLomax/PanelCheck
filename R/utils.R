@@ -143,6 +143,205 @@ palette_performance <- function() {
 }
 
 
+# ── Performance flagging ───────────────────────────────────────────────────────
+#
+# FLAG_THRESHOLDS: single config object for all domain cutoffs.
+# apply_flag(domain, value): returns list(emoji, tier, descriptor).
+# .add_flags(domain, values): vectorised wrapper returning two named vectors.
+# .flag_footer(): standard disclaimer string for printed outputs.
+#
+# Confidence annotations:
+#   ✅ Commonly cited / analytically grounded
+#   ⚠️  General practice — configurable defaults, adjust to panel context
+#   🔍 Needs verification before citing in publications
+
+FLAG_THRESHOLDS <- list(
+
+  agreement = list(
+    # ⚠️ General practice — no single paper defines these cutoffs
+    pass    = 0.80,
+    monitor = 0.60
+  ),
+
+  discrimination = list(
+    # ✅ Standard alpha; borderline zone is ⚠️ general practice
+    pass    = 0.05,
+    monitor = 0.10
+  ),
+
+  replicate_sig = list(
+    # ⚠️ General practice — significant Replicate effect signals session-to-session
+    # inconsistency; thresholds mirror the discrimination domain but interpretation
+    # is inverted (low p = bad, high p = good).
+    concern = 0.05,
+    monitor = 0.10
+  ),
+
+  repeatability_cv = list(
+    # ⚠️ General practice — CV% thresholds from variance component
+    # interpretation norms, not a single definitive source
+    pass    = 20,
+    monitor = 40
+  ),
+
+  vc_as_ratio = list(
+    # Assessor:Sample / Residual ratio
+    # ✅ < 1.0 is analytically grounded (residual exceeds signal)
+    # ⚠️ 1.5 and 2.0 cutoffs are general practice
+    concern_low = 1.0,
+    pass        = 1.5,
+    monitor     = 2.0
+  ),
+
+  vc_assessor_pct = list(
+    # ⚠️ General practice — reflects industry SOP norms
+    pass    = 25,
+    monitor = 40
+  ),
+
+  vc_replicate_pct = list(
+    # ⚠️ General practice; near-zero tolerance is ✅ analytically grounded
+    pass     = 5,
+    monitor  = 10,
+    zero_tol = 1e-6
+  )
+)
+
+#' Apply a performance flag to a single numeric value.
+#'
+#' @param domain  One of: "agreement", "discrimination", "replicate_sig",
+#'                "repeatability_cv", "vc_as_ratio", "vc_assessor_pct",
+#'                "vc_replicate_pct".
+#' @param value   Numeric value to evaluate.
+#' @return Named list: emoji (chr), tier (chr — PASS/MONITOR/CONCERN/UNKNOWN),
+#'         descriptor (chr).
+apply_flag <- function(domain, value) {
+  th <- FLAG_THRESHOLDS[[domain]]
+  if (is.null(th)) stop("Unknown flagging domain: ", domain)
+
+  if (is.na(value) || is.null(value)) {
+    return(list(emoji = "\u2B1C", tier = "UNKNOWN", descriptor = "Insufficient data"))
+  }
+
+  switch(domain,
+
+    agreement = {
+      if (value < 0)
+        list(emoji = "\U1F534", tier = "CONCERN",
+             descriptor = "Inverse scoring \u2014 check scale direction")
+      else if (value >= th$pass)
+        list(emoji = "\U1F7E2", tier = "PASS",
+             descriptor = "Strong agreement")
+      else if (value >= th$monitor)
+        list(emoji = "\U1F7E1", tier = "MONITOR",
+             descriptor = "Moderate agreement \u2014 monitor")
+      else
+        list(emoji = "\U1F534", tier = "CONCERN",
+             descriptor = "Poor agreement \u2014 recommend exclusion")
+    },
+
+    discrimination = {
+      if (value < th$pass)
+        list(emoji = "\U1F7E2", tier = "PASS",
+             descriptor = "Discriminates samples reliably")
+      else if (value < th$monitor)
+        list(emoji = "\U1F7E1", tier = "MONITOR",
+             descriptor = "Borderline discrimination")
+      else
+        list(emoji = "\U1F534", tier = "CONCERN",
+             descriptor = "Poor discrimination \u2014 cannot distinguish samples")
+    },
+
+    replicate_sig = {
+      # Inverted: a NON-significant Replicate effect is desirable (good repeatability).
+      if (value > th$monitor)
+        list(emoji = "\U1F7E2", tier = "PASS",
+             descriptor = "No significant session effect \u2014 good repeatability")
+      else if (value > th$concern)
+        list(emoji = "\U1F7E1", tier = "MONITOR",
+             descriptor = "Borderline session effect \u2014 monitor")
+      else
+        list(emoji = "\U1F534", tier = "CONCERN",
+             descriptor = "Significant session inconsistency \u2014 investigate")
+    },
+
+    repeatability_cv = {
+      if (value < th$pass)
+        list(emoji = "\U1F7E2", tier = "PASS",
+             descriptor = "Good repeatability")
+      else if (value < th$monitor)
+        list(emoji = "\U1F7E1", tier = "MONITOR",
+             descriptor = "Marginal repeatability \u2014 monitor")
+      else
+        list(emoji = "\U1F534", tier = "CONCERN",
+             descriptor = "Poor repeatability \u2014 investigate")
+    },
+
+    vc_as_ratio = {
+      if (value < th$concern_low)
+        list(emoji = "\U1F534", tier = "CONCERN",
+             descriptor = "Residual exceeds disagreement \u2014 unreliable panel signal")
+      else if (value <= th$pass)
+        list(emoji = "\U1F7E2", tier = "PASS",
+             descriptor = "Acceptable consensus on sample ordering")
+      else if (value <= th$monitor)
+        list(emoji = "\U1F7E1", tier = "MONITOR",
+             descriptor = "Moderate disagreement on sample ordering")
+      else
+        list(emoji = "\U1F534", tier = "CONCERN",
+             descriptor = "High disagreement \u2014 review attribute")
+    },
+
+    vc_assessor_pct = {
+      if (value < th$pass)
+        list(emoji = "\U1F7E2", tier = "PASS",
+             descriptor = "Low scale bias")
+      else if (value < th$monitor)
+        list(emoji = "\U1F7E1", tier = "MONITOR",
+             descriptor = "Moderate scale bias \u2014 anchor retraining suggested")
+      else
+        list(emoji = "\U1F534", tier = "CONCERN",
+             descriptor = "Scale bias dominates \u2014 retraining required")
+    },
+
+    vc_replicate_pct = {
+      if (value < th$zero_tol)
+        list(emoji = "\U1F7E1", tier = "MONITOR",
+             descriptor = "Near-zero variance \u2014 check replicate blinding")
+      else if (value < th$pass)
+        list(emoji = "\U1F7E2", tier = "PASS",
+             descriptor = "Good session consistency")
+      else if (value < th$monitor)
+        list(emoji = "\U1F7E1", tier = "MONITOR",
+             descriptor = "Marginal session consistency")
+      else
+        list(emoji = "\U1F534", tier = "CONCERN",
+             descriptor = "Poor session consistency")
+    }
+  )
+}
+
+# Vectorised wrapper — apply_flag() over a vector; returns two named character
+# vectors suitable for use inside dplyr::mutate().
+.add_flags <- function(domain, values) {
+  flags <- lapply(values, apply_flag, domain = domain)
+  list(
+    flag       = vapply(flags, `[[`, "", "emoji"),
+    descriptor = vapply(flags, `[[`, "", "descriptor")
+  )
+}
+
+#' Standard disclaimer footer for all flagged table outputs.
+.flag_footer <- function() {
+  paste0(
+    "\u26a0\ufe0f Performance flags are based on widely used guidelines in ",
+    "sensory science. Thresholds may be adjusted to reflect panel context, ",
+    "product category, and institutional SOPs. See CLAUDE.md for reference ",
+    "details and confidence levels."
+  )
+}
+
+
 # ── Analysis skip log ──────────────────────────────────────────────────────────
 #
 # A lightweight mutable log that accumulates the names and reasons of any steps

@@ -34,6 +34,7 @@ library(purrr)
 library(dplyr)
 library(DT)
 library(gt)
+library(htmltools)
 ```
 
 
@@ -49,6 +50,7 @@ table_names <- c(
   "panel_performance",
   "assessor_discrimination",
   "assessor_agreement",
+  "assessor_flag_summary",
   "panel_anova",
   "repeatability_anova",
   "mixed_model_fixed",
@@ -57,11 +59,109 @@ table_names <- c(
   "tukey_cld",
   "tukey_emmeans",
   "pca_sample_coords",
-  "pca_variable_coords"
+  "pca_variable_coords",
+  "vc_flags"
 )
 
-tables <- map(table_names, \(t) read_xlsx(xlsx_path, sheet = t))
+tables <- map(
+  table_names,
+  \(t) tryCatch(read_xlsx(xlsx_path, sheet = t), error = \(e) NULL)
+)
 names(tables) <- table_names
+```
+
+```{r flag-helpers, include=FALSE}
+# ── Flag colour helper — cell-level ──────────────────────────────────────────
+# Used for tables with multiple flag columns per row (e.g. assessor_flag_summary)
+# where row-level colouring would be ambiguous.
+.dt_flag_colours <- function(dt, flag_col = "flag") {
+  DT::formatStyle(
+    dt, flag_col,
+    backgroundColor = DT::styleEqual(
+      c("\U1F7E2", "\U1F7E1", "\U1F534", "\u2B1C"),
+      c("#d4edda",  "#fff3cd",  "#f8d7da",  "#f8f9fa")
+    )
+  )
+}
+
+# ── Flag row helper — row-level ───────────────────────────────────────────────
+# Builds a complete DT datatable. The flag column is hidden from display
+# (columnDefs visible = FALSE) while still driving row highlights via
+# formatStyle(..., target = "row"). The descriptor column remains visible.
+.dt_flag_rows <- function(tbl, caption = NULL, page_length = 15,
+                           flag_col  = "flag",
+                           hide_cols = intersect(c("flag"), names(tbl))) {
+  # 0-based column indices required by DataTables columnDefs
+  hide_idx <- as.list(which(names(tbl) %in% hide_cols) - 1L)
+
+  tbl |>
+    mutate(across(where(is.numeric), \(x) round(x, 2))) |>
+    datatable(
+      filter     = "top",
+      rownames   = FALSE,
+      extensions = "Buttons",
+      caption    = caption,
+      options    = list(
+        dom        = "Bfrtip",
+        buttons    = c("csv", "excel"),
+        pageLength = page_length,
+        scrollX    = TRUE,
+        columnDefs = list(list(visible = FALSE, targets = hide_idx))
+      )
+    ) |>
+    formatStyle(
+      flag_col,
+      target = "row",
+      backgroundColor = styleEqual(
+        c("\U1F7E2", "\U1F7E1", "\U1F534", "\u2B1C"),
+        c("#d4edda",  "#fff3cd",  "#f8d7da",  "#f8f9fa")
+      )
+    )
+}
+
+# Standard disclaimer shown below each flag table.
+.flag_footer_md <- paste0(
+  "> \u26a0\ufe0f **Note:** Performance flags are based on widely used guidelines in ",
+  "sensory science. Thresholds may be adjusted to reflect panel context, product ",
+  "category, and institutional SOPs."
+)
+
+# Significance key footnote — shared across all tables reporting p-values.
+.sig_key <- "<small>*Significance key:* `***` p < 0.001 &nbsp;·&nbsp; `**` p < 0.01 &nbsp;·&nbsp; `*` p < 0.05 &nbsp;·&nbsp; `ns` p \u2265 0.05</small>"
+
+# Plain DT datatable — shared options for non-flagged tables.
+.dt_plain <- function(tbl, caption = NULL, page_length = 15) {
+  tbl |>
+    mutate(across(where(is.numeric), \(x) round(x, 2))) |>
+    datatable(
+      filter     = "top",
+      rownames   = FALSE,
+      extensions = "Buttons",
+      caption    = caption,
+      options    = list(
+        dom        = "Bfrtip",
+        buttons    = c("csv", "excel"),
+        pageLength = page_length,
+        scrollX    = TRUE
+      )
+    )
+}
+
+# gt table styling — shared across all gt summary tables.
+.gt_style <- function(gt_tbl) {
+  gt_tbl |>
+    fmt_number(decimals = 2) |>
+    tab_style(
+      style     = cell_text(weight = "bold"),
+      locations = cells_column_labels()
+    ) |>
+    opt_row_striping() |>
+    opt_table_font(font = google_font("Source Sans Pro")) |>
+    tab_options(
+      table.font.size = px(13),
+      heading.align   = "left"
+    )
+}
 ```
 
 ---
@@ -92,20 +192,8 @@ Descriptive statistics summarise the distribution of sensory scores across all a
 Each row represents one attribute–sample combination. Columns report the minimum, maximum, mean, standard deviation (SD), standard error of the mean (SEM), and coefficient of variation (CV%).
 
 ```{r desc-by-sample}
-tables[["descriptive_stats"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 1. Descriptive statistics per attribute and sample."
-  )
+.dt_plain(tables[["descriptive_stats"]],
+          caption = "Table 1. Descriptive statistics per attribute and sample.")
 ```
 
 ## Overall
@@ -113,51 +201,23 @@ tables[["descriptive_stats"]] |>
 Panel-wide descriptive statistics collapsed across all samples and replicates.
 
 ```{r desc-overall}
-tables[["descriptive_stats_overall"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 2. Overall descriptive statistics per attribute."
-  )
+.dt_plain(tables[["descriptive_stats_overall"]],
+          caption = "Table 2. Overall descriptive statistics per attribute.")
 ```
 
 ---
 
 # Panel Performance {.tabset}
 
-Panel performance is evaluated per assessor and attribute using three complementary metrics:
-
-- **Discrimination** — ability to distinguish between samples (F-value from one-way ANOVA per assessor)
-- **Repeatability** — consistency across replicates (CV%)
-- **Agreement** — correlation of individual scores with the panel mean
+Panel performance is evaluated per assessor and attribute across three complementary domains: **discrimination** (ability to distinguish between samples), **repeatability** (consistency across replicates), and **agreement** (correlation with the panel mean). Row highlighting in the domain tabs reflects automated QC flags — 🟢 PASS · 🟡 MONITOR · 🔴 CONCERN — based on widely used thresholds in sensory science.
 
 ## Summary Table
 
 The panel performance table combines all three metrics into a single summary per assessor and attribute. Higher discrimination F-values and agreement correlations, combined with lower repeatability CVs, indicate a well-performing assessor.
 
 ```{r panel-perf}
-tables[["panel_performance"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 3. Combined panel performance metrics per assessor and attribute."
-  )
+.dt_plain(tables[["panel_performance"]],
+          caption = "Table 3. Combined panel performance metrics per assessor and attribute.")
 ```
 
 ## Performance Counts
@@ -172,14 +232,7 @@ tables[["Table5_perf_counts"]] |>
     subtitle = "Number of attributes per assessor meeting performance thresholds"
   ) |>
   tab_spanner_delim(delim = "_") |>
-  fmt_number(decimals = 2) |>
-  opt_row_striping() |>
-  opt_table_font(font = google_font("Source Sans Pro")) |>
-  tab_options(
-    table.font.size    = px(13),
-    heading.align      = "left",
-    column_labels.font.weight = "bold"
-  )
+  .gt_style()
 ```
 
 ## Mean Score Plot
@@ -190,32 +243,55 @@ The panel mean score plot displays the average rating for each sample across all
 knitr::include_graphics("figs/R/panel_mean_scores.png")
 ```
 
----
+## Assessor Flag Summary
 
-# Assessor Discrimination {.tabset}
+A concise QC summary — one row per assessor — aggregating performance across all attributes. Each domain (agreement, repeatability, discrimination) is flagged independently; no single composite score is produced. 🟢 PASS · 🟡 MONITOR · 🔴 CONCERN · ⬜ Insufficient data.
 
-Discrimination is assessed via a one-way ANOVA per assessor per attribute. The resulting F-value indicates how well each assessor distinguishes between samples on that attribute — a higher F-value reflects stronger discrimination.
-
-## Discrimination Table
-
-```{r discrimination-table}
-tables[["assessor_discrimination"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 5. One-way ANOVA F-values per assessor and attribute."
-  )
+```{r assessor-flags}
+if (!is.null(tables[["assessor_flag_summary"]])) {
+  dt <- tables[["assessor_flag_summary"]] |>
+    mutate(across(where(is.numeric), \(x) round(x, 2))) |>
+    datatable(
+      filter    = "top",
+      rownames  = FALSE,
+      extensions = "Buttons",
+      options   = list(
+        dom        = "Bfrtip",
+        buttons    = c("csv", "excel"),
+        pageLength = 20,
+        scrollX    = TRUE
+      ),
+      caption = htmltools::tags$caption(
+        style = "caption-side: top; text-align: left;",
+        "Table 4a. Assessor flag summary — per-domain QC flags aggregated across attributes."
+      )
+    )
+  # Apply background colours to all flag columns (columns ending in _flag)
+  flag_cols <- grep("_flag$", names(tables[["assessor_flag_summary"]]), value = TRUE)
+  for (fc in flag_cols) dt <- .dt_flag_colours(dt, fc)
+  dt
+} else {
+  cat("*Assessor flag summary table not available — re-run `run_all.R` to generate.*")
+}
 ```
 
-<small>*Significance key:* `***` p < 0.001 · `**` p < 0.01 · `*` p < 0.05 · `ns` p ≥ 0.05</small>
+`r if (!is.null(tables[["assessor_flag_summary"]])) .flag_footer_md`
+
+## Discrimination
+
+One-way ANOVA per assessor per attribute. The F-value indicates how well each assessor distinguishes between samples on that attribute — a higher F-value reflects stronger discrimination.
+
+```{r discrimination-table}
+.dt_flag_rows(
+  tables[["assessor_discrimination"]],
+  caption     = "Table 5. One-way ANOVA F-values per assessor and attribute.",
+  page_length = 15
+)
+```
+
+`r .sig_key` <small>· Row colour: 🟢 p ≤ 0.05 · 🟡 p ≤ 0.10 · 🔴 p > 0.10</small>
+
+`r .flag_footer_md`
 
 ## Discrimination Bars
 
@@ -224,6 +300,38 @@ Each bar represents an assessor's F-value for a given attribute. Bar colour refl
 ```{r discrimination-bars, out.width="90%"}
 knitr::include_graphics("figs/R/discrimination_bars.png")
 ```
+
+## Repeatability ANOVA
+
+Two-way additive fixed-effects ANOVA (`value ~ Sample + Replicate`, Type III SS) fitted per assessor × attribute. No Sample × Replicate interaction is included — with typically only two replicates this term cannot be estimated reliably. A significant **Sample** effect confirms the assessor discriminates between products; a significant **Replicate** effect indicates session-to-session inconsistency.
+
+```{r repeatability}
+.dt_flag_rows(
+  tables[["repeatability_anova"]],
+  caption     = "Table 8. Repeatability ANOVA results per assessor and attribute.",
+  page_length = 15
+)
+```
+
+`r .sig_key` <small>· Sample rows: 🟢 p ≤ 0.05 · 🔴 p > 0.10 &nbsp;·&nbsp; Replicate rows: 🟢 p > 0.10 (consistent) · 🔴 p ≤ 0.05 (session inconsistency)</small>
+
+`r .flag_footer_md`
+
+## Assessor Agreement
+
+Pearson correlation of each assessor's scores with the panel mean per attribute. Values approaching 1 indicate the assessor aligns closely with the panel consensus; values near 0 or negative indicate systematic disagreement or scale reversal.
+
+```{r agreement}
+.dt_flag_rows(
+  tables[["assessor_agreement"]],
+  caption     = "Table 9. Assessor agreement (Pearson r with panel mean) per assessor and attribute.",
+  page_length = 15
+)
+```
+
+`r .sig_key` <small>· Row colour: 🟢 r ≥ 0.80 · 🟡 r ≥ 0.60 · 🔴 r < 0.60 or negative</small>
+
+`r .flag_footer_md`
 
 ---
 
@@ -241,44 +349,20 @@ F-ratios are computed as the marginal mean square for each effect divided by the
 ## ANOVA F-Ratios
 
 ```{r anova-fratios}
-tables[["Table6_anova_Fratios"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 6. Three-way fixed-effects ANOVA F-ratios per attribute (wide format). Each cell shows the rounded F-ratio and significance stars for the Sample, Panellist, and Replicate main effects. See Table 7 for full SS, df, MS, and interaction term detail."
-  )
+.dt_plain(tables[["Table6_anova_Fratios"]],
+          caption = "Table 6. Three-way fixed-effects ANOVA F-ratios per attribute (wide format). Each cell shows the rounded F-ratio and significance stars for the Sample, Panellist, and Replicate main effects. See Table 7 for full SS, df, MS, and interaction term detail.")
 ```
 
-<small>*Significance key:* `***` p < 0.001 · `**` p < 0.01 · `*` p < 0.05 · `ns` p ≥ 0.05</small>
+`r .sig_key`
 
 ## Panel ANOVA Detail
 
 ```{r panel-anova-detail}
-tables[["panel_anova"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 7. Three-way fixed-effects ANOVA results in long format — one row per effect, reporting SS, df, MS, F, and p per attribute. Includes the Sample × Assessor interaction where design is complete."
-  )
+.dt_plain(tables[["panel_anova"]],
+          caption = "Table 7. Three-way fixed-effects ANOVA results in long format — one row per effect, reporting SS, df, MS, F, and p per attribute. Includes the Sample × Assessor interaction where design is complete.")
 ```
 
-<small>*Significance key:* `***` p < 0.001 · `**` p < 0.01 · `*` p < 0.05 · `ns` p ≥ 0.05</small>
+`r .sig_key`
 
 ## F-Value Heatmap
 
@@ -309,56 +393,6 @@ knitr::include_graphics("figs/R/pvalue_heatmap.png")
 ```{r panel-anova-fvalues, out.width="90%"}
 knitr::include_graphics("figs/R/panel_anova_fvalues.png")
 ```
-
----
-
-# Repeatability & Agreement {.tabset}
-
-## Repeatability ANOVA
-
-Repeatability is evaluated using a two-way additive fixed-effects ANOVA (value ~ Sample + Replicate, Type III SS) fitted separately for each assessor × attribute combination. No Sample × Replicate interaction is included — with typically only two replicates this term cannot be estimated reliably. A significant **Sample** effect confirms the assessor discriminates between products; a significant **Replicate** effect indicates session-to-session inconsistency (poor repeatability).
-
-```{r repeatability}
-tables[["repeatability_anova"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 8. Repeatability ANOVA results per assessor and attribute, reporting F and p for the Sample and Replicate effects."
-  )
-```
-
-<small>*Significance key:* `***` p < 0.001 · `**` p < 0.01 · `*` p < 0.05 · `ns` p ≥ 0.05</small>
-
-## Assessor Agreement
-
-Agreement is quantified as the Pearson correlation between each assessor's scores and the panel mean. Values approaching 1 indicate the assessor aligns closely with the consensus; values near 0 or negative indicate systematic disagreement.
-
-```{r agreement}
-tables[["assessor_agreement"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 9. Assessor agreement (correlation with panel mean) per attribute."
-  )
-```
-
-<small>*Significance key:* `***` p < 0.001 · `**` p < 0.01 · `*` p < 0.05 · `ns` p ≥ 0.05</small>
 
 ---
 
@@ -407,46 +441,53 @@ The fixed effects table reports the **F-statistic and p-value for the overall Sa
 
 ```{r mixed-fixed}
 tables[["mixed_model_fixed"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
   gt() |>
   tab_header(
     title    = "Table 10. Mixed Model Fixed Effects",
     subtitle = "F-test statistics for the Sample effect per attribute (Satterthwaite df)"
   ) |>
-  fmt_number(decimals = 2) |>
-  tab_style(
-    style = cell_text(weight = "bold"),
-    locations = cells_column_labels()
-  ) |>
-  opt_row_striping() |>
-  opt_table_font(font = google_font("Source Sans Pro")) |>
-  tab_options(
-    table.font.size    = px(13),
-    heading.align      = "left"
-  )
+  .gt_style()
 ```
 
-<small>*Significance key:* `***` p < 0.001 · `**` p < 0.01 · `*` p < 0.05 · `ns` p ≥ 0.05</small>
+`r .sig_key`
 
 ## Random Effects
 
-The random effects table quantifies the variance attributable to each random component (Assessor, Assessor:Replicate, Assessor:Sample, Residual). Large Assessor:Sample variance indicates that panellists disagree on the relative ranking of products.
+Variance components quantify each random term's share of total variability. **% of total** shows each component's proportional contribution. The **Assessor:Sample ratio** (Assessor:Sample ÷ Residual) is the primary diagnostic for panel consensus — values below 1.0 indicate residual noise exceeds the signal; values above 2.0 indicate high disagreement on sample ordering. Row colour reflects the QC flag for each component.
 
 ```{r mixed-random}
-tables[["mixed_model_random"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 11. Mixed model random effects variance components per attribute."
+if (!is.null(tables[["vc_flags"]])) {
+  .dt_flag_rows(
+    tables[["vc_flags"]],
+    caption     = "Table 11. Mixed model random effects — variance components with QC flags per attribute.",
+    page_length = 20
   )
+} else {
+  tables[["mixed_model_random"]] |>
+    mutate(across(where(is.numeric), \(x) round(x, 2))) |>
+    datatable(
+      filter    = "top",
+      rownames  = FALSE,
+      extensions = "Buttons",
+      options   = list(
+        dom        = "Bfrtip",
+        buttons    = c("csv", "excel"),
+        pageLength = 15,
+        scrollX    = TRUE
+      ),
+      caption = "Table 11. Mixed model random effects variance components per attribute."
+    )
+}
+```
+
+`r if (!is.null(tables[["vc_flags"]])) .flag_footer_md`
+
+## Variance Breakdown
+
+The stacked bar chart partitions total variance per attribute into four sources: **Assessor** (individual scale use), **Assessor:Replicate** (session consistency), **Assessor:Sample** (disagreement on sample ordering), and **Residual** (unexplained error). A large Assessor:Sample proportion relative to Residual indicates the panel disagrees on how samples are ranked.
+
+```{r variance-components, out.width="90%"}
+knitr::include_graphics("figs/R/variance_components.png")
 ```
 
 ---
@@ -460,41 +501,17 @@ Where the mixed model identifies a significant Sample effect, a Tukey HSD post-h
 Estimated marginal means (EMMs) are model-adjusted sample means that account for imbalance and random effects. They provide the best estimates of true sample differences per attribute.
 
 ```{r tukey-emmeans}
-tables[["tukey_emmeans"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 12. Estimated marginal means (EMMs) per sample and attribute."
-  )
+.dt_plain(tables[["tukey_emmeans"]],
+          caption = "Table 12. Estimated marginal means (EMMs) per sample and attribute.")
 ```
 
 ## Compact Letter Display
 
-Each row assigns a CLD group letter to a sample–attribute combination. Samples sharing the same letter do not differ significantly; samples with no shared letters are significantly different.
+CLD group letter per sample–attribute combination. Samples sharing a letter do not differ significantly at α = 0.05.
 
 ```{r tukey-cld}
-tables[["tukey_cld"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 13. Compact letter display (CLD) groups from Tukey HSD."
-  )
+.dt_plain(tables[["tukey_cld"]],
+          caption = "Table 13. Compact letter display (CLD) groups from Tukey HSD.")
 ```
 
 ## Pairwise Contrasts
@@ -502,23 +519,11 @@ tables[["tukey_cld"]] |>
 Full pairwise contrast table showing estimated differences, standard errors, t-ratios, and adjusted p-values for every sample pair per attribute.
 
 ```{r tukey-contrasts}
-tables[["tukey_contrasts"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
-  datatable(
-    filter    = "top",
-    rownames  = FALSE,
-    extensions = "Buttons",
-    options   = list(
-      dom        = "Bfrtip",
-      buttons    = c("csv", "excel"),
-      pageLength = 15,
-      scrollX    = TRUE
-    ),
-    caption = "Table 14. Tukey HSD pairwise contrasts per attribute."
-  )
+.dt_plain(tables[["tukey_contrasts"]],
+          caption = "Table 14. Tukey HSD pairwise contrasts per attribute.")
 ```
 
-<small>*Significance key:* `***` p < 0.001 · `**` p < 0.01 · `*` p < 0.05 · `ns` p ≥ 0.05</small>
+`r .sig_key`
 
 ## Means & CLD Plot
 
@@ -534,18 +539,6 @@ The heatmap displays Tukey-adjusted p-values for all pairwise sample comparisons
 
 ```{r tukey-heatmap, out.width="90%"}
 knitr::include_graphics("figs/R/tukey_heatmap.png")
-```
-
----
-
-# Variance Components {.tabset}
-
-## Variance Breakdown Plot
-
-The stacked bar chart partitions total variance per attribute into four sources: **Sample** (product effect), **Assessor** (individual scale use), **Assessor:Sample** (interaction / disagreement), and **Residual** (unexplained error). A large Sample proportion relative to residual error indicates the panel is effectively differentiating between products.
-
-```{r variance-components, out.width="90%"}
-knitr::include_graphics("figs/R/variance_components.png")
 ```
 
 ---
@@ -584,23 +577,12 @@ The sample coordinate table reports the PCA scores (position on each component) 
 
 ```{r pca-samples}
 tables[["pca_sample_coords"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
   gt() |>
   tab_header(
     title    = "Table 15. PCA Sample Coordinates",
     subtitle = "Consensus matrix scores projected onto principal components"
   ) |>
-  fmt_number(decimals = 2) |>
-  tab_style(
-    style = cell_text(weight = "bold"),
-    locations = cells_column_labels()
-  ) |>
-  opt_row_striping() |>
-  opt_table_font(font = google_font("Source Sans Pro")) |>
-  tab_options(
-    table.font.size = px(13),
-    heading.align   = "left"
-  )
+  .gt_style()
 ```
 
 ## Variable Coordinates
@@ -609,23 +591,12 @@ The variable coordinate table reports the PCA loadings (contribution of each att
 
 ```{r pca-variables}
 tables[["pca_variable_coords"]] |>
-  mutate(across(where(is.numeric), \(x) round(x, 2))) |>
   gt() |>
   tab_header(
     title    = "Table 16. PCA Variable Coordinates (Loadings)",
     subtitle = "Sensory attribute contributions to each principal component"
   ) |>
-  fmt_number(decimals = 2) |>
-  tab_style(
-    style = cell_text(weight = "bold"),
-    locations = cells_column_labels()
-  ) |>
-  opt_row_striping() |>
-  opt_table_font(font = google_font("Source Sans Pro")) |>
-  tab_options(
-    table.font.size = px(13),
-    heading.align   = "left"
-  )
+  .gt_style()
 ```
 
 ---

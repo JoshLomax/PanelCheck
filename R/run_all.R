@@ -22,24 +22,16 @@
 # See README.md for data pre-processing guidance and folder setup instructions.
 
 # ══ USER SETTINGS ════════════════════════════════════════════════════════════
+# These defaults apply when sourcing run_all.R directly (single-dataset mode).
+# When called from run_batch.R these variables are already set by the batch
+# script and the if(!exists()) guards below leave them untouched.
 
-# Path to your data file (relative to this script, or use an absolute path)
-DATA_FILE   <- "../Data_Bread.xlsx"
-
-# Where to save plots and tables (relative to this script)
-OUTPUT_DIR   <- "../figs/R/"
-
-# Set TRUE to save plots as PNG files to OUTPUT_DIR
-SAVE_PLOTS   <- TRUE
-
-# Set TRUE to save all result tables as an Excel workbook to OUTPUT_DIR
-SAVE_TABLES  <- TRUE
-
-# If both FALSE the outputs will only be available in the rstudio session
-
-# Figure dimensions (inches)
-FIG_WIDTH   <- 12
-FIG_HEIGHT  <- 8
+if (!exists("DATA_FILE"))  DATA_FILE  <- "../Data_Bread.xlsx"
+if (!exists("OUTPUT_DIR")) OUTPUT_DIR <- "../figs/R"
+if (!exists("SAVE_PLOTS")) SAVE_PLOTS <- TRUE   # TRUE → save PNG plots
+if (!exists("SAVE_TABLES")) SAVE_TABLES <- TRUE # TRUE → save xlsx workbook
+if (!exists("FIG_WIDTH"))  FIG_WIDTH  <- 12
+if (!exists("FIG_HEIGHT")) FIG_HEIGHT <- 8
 
 # ══ END USER SETTINGS ════════════════════════════════════════════════════════
 
@@ -162,6 +154,15 @@ if (!is.null(perf)) {
 }
 if (!is.null(rep_anova)) tables[["repeatability_anova"]] <- rep_anova
 
+# Assessor-level flag summary (QC table — separate from Table 5 / Table 6)
+assessor_flags <- if (!is.null(perf)) {
+  .try_step("Assessor flag summary", assessor_flag_summary(perf))
+} else NULL
+if (!is.null(assessor_flags)) {
+  print(assessor_flags)
+  tables[["assessor_flag_summary"]] <- assessor_flags
+}
+
 
 # ── 3. F-value overview plots ─────────────────────────────────────────────────
 
@@ -258,6 +259,10 @@ if (!is.null(mm)) {
 
   tables[["mixed_model_fixed"]]  <- mm$fixed_effects
   tables[["mixed_model_random"]] <- mm$random_effects
+
+  # Variance component flags are embedded in mm$random_effects (via flag_variance_components())
+  # Expose the flagged VC table as its own sheet for visibility
+  tables[["vc_flags"]] <- mm$random_effects
 }
 
 

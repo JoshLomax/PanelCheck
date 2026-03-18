@@ -127,11 +127,76 @@ mixed_model_anova <- function(df, verbose = TRUE) {
     )
   }
 
+  re_raw    <- bind_rows(random_rows)
+  re_flagged <- tryCatch(
+    flag_variance_components(re_raw),
+    error = function(e) {
+      message("  WARNING: flag_variance_components() failed — ", conditionMessage(e))
+      re_raw
+    }
+  )
+
   list(
     fixed_effects  = bind_rows(fixed_rows),
-    random_effects = bind_rows(random_rows),
+    random_effects = re_flagged,
     models         = models
   )
+}
+
+
+# ── Variance component flags ───────────────────────────────────────────────────
+
+#' Add percentage of total variance, Assessor:Sample/Residual ratio, and
+#' performance flags to the random_effects table from mixed_model_anova().
+#'
+#' Called automatically inside mixed_model_anova() — the enriched table is
+#' returned as mm$random_effects. Also available as a standalone function if
+#' you want to re-flag with different thresholds.
+#'
+#' @param re  The raw random_effects tibble (Attribute, Component, Variance, Std_Dev).
+#' @return The same tibble with additional columns:
+#'   pct_total   — variance as % of total within each attribute
+#'   as_ratio    — Assessor:Sample / Residual (NA for non A:S rows)
+#'   flag        — emoji tier
+#'   descriptor  — plain-language flag text
+flag_variance_components <- function(re) {
+  re %>%
+    group_by(Attribute) %>%
+    mutate(
+      pct_total = 100 * Variance / sum(Variance, na.rm = TRUE)
+    ) %>%
+    ungroup() %>%
+    # Compute A:S / Residual ratio per attribute
+    group_by(Attribute) %>%
+    mutate(
+      as_ratio = ifelse(
+        Component == "Assessor:Sample",
+        Variance / Variance[Component == "Residual"],
+        NA_real_
+      )
+    ) %>%
+    ungroup() %>%
+    # Apply flags per component type
+    mutate(
+      flag = case_when(
+        Component == "Assessor" ~
+          .add_flags("vc_assessor_pct",  pct_total)$flag,
+        Component == "Assessor:Replicate" ~
+          .add_flags("vc_replicate_pct", pct_total)$flag,
+        Component == "Assessor:Sample" ~
+          .add_flags("vc_as_ratio",      as_ratio)$flag,
+        TRUE ~ NA_character_   # Residual — no flag
+      ),
+      descriptor = case_when(
+        Component == "Assessor" ~
+          .add_flags("vc_assessor_pct",  pct_total)$descriptor,
+        Component == "Assessor:Replicate" ~
+          .add_flags("vc_replicate_pct", pct_total)$descriptor,
+        Component == "Assessor:Sample" ~
+          .add_flags("vc_as_ratio",      as_ratio)$descriptor,
+        TRUE ~ NA_character_
+      )
+    )
 }
 
 

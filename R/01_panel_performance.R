@@ -220,7 +220,11 @@ assessor_discrimination <- function(df) {
                sig = NA_character_, mean_score = NA_real_)
       })
     }) |> list_rbind()
-  }) |> list_rbind()
+  }) |> list_rbind() |>
+    mutate(
+      flag       = .add_flags("discrimination", p_value)$flag,
+      descriptor = .add_flags("discrimination", p_value)$descriptor
+    )
 }
 
 
@@ -316,7 +320,28 @@ repeatability_anova <- function(df) {
                F_value = NA_real_, p_value = NA_real_, sig = NA_character_)
       })
     }) |> list_rbind()
-  }) |> list_rbind()
+  }) |> list_rbind() |>
+    # Flag each row based on its Effect:
+    #   Sample    → discrimination domain  (low p = PASS — assessor distinguishes products)
+    #   Replicate → replicate_sig domain   (high p = PASS — no session inconsistency)
+    #   Residual  → no flag (⬜)
+    mutate(
+      .f_disc = .add_flags("discrimination", p_value)$flag,
+      .f_rep  = .add_flags("replicate_sig",  p_value)$flag,
+      .d_disc = .add_flags("discrimination", p_value)$descriptor,
+      .d_rep  = .add_flags("replicate_sig",  p_value)$descriptor,
+      flag = case_when(
+        Effect == "Sample"    ~ .f_disc,
+        Effect == "Replicate" ~ .f_rep,
+        TRUE                  ~ "\u2B1C"
+      ),
+      descriptor = case_when(
+        Effect == "Sample"    ~ .d_disc,
+        Effect == "Replicate" ~ .d_rep,
+        TRUE                  ~ NA_character_
+      )
+    ) |>
+    select(-.f_disc, -.f_rep, -.d_disc, -.d_rep)
 }
 
 
@@ -345,6 +370,10 @@ assessor_repeatability <- function(df) {
       cv_pct = ifelse(mean != 0, (sd / mean) * 100, NA_real_),
       n_reps = n(),
       .groups = "drop"
+    ) %>%
+    mutate(
+      flag       = .add_flags("repeatability_cv", cv_pct)$flag,
+      descriptor = .add_flags("repeatability_cv", cv_pct)$descriptor
     )
 }
 
@@ -425,7 +454,11 @@ assessor_agreement <- function(df) {
         )
       }
     }) |> list_rbind()
-  }) |> list_rbind()
+  }) |> list_rbind() |>
+    mutate(
+      flag       = .add_flags("agreement", r)$flag,
+      descriptor = .add_flags("agreement", r)$descriptor
+    )
 }
 
 
@@ -518,6 +551,81 @@ panel_performance <- function(df) {
     summary        = summary_tbl,
     anova          = anova_tbl
   )
+}
+
+
+# ── Assessor flag summary ──────────────────────────────────────────────────────
+
+#' Aggregate performance flags per assessor across all attributes.
+#'
+#' Summarises agreement, repeatability, and discrimination flags for each
+#' assessor into a single wide table — one row per assessor, one flag column
+#' per domain. Table 5 and Table 6 are left unchanged; this is a separate
+#' QC-focused output.
+#'
+#' No overall composite flag is computed. Each domain is reported independently
+#' so that analysts can apply their own exclusion logic.
+#'
+#' @param perf  Output of panel_performance().
+#' @return A tibble: Assessor | mean_r | agreement_flag | agreement_descriptor |
+#'         mean_cv | repeatability_flag | repeatability_descriptor |
+#'         pct_sig_disc | discrimination_flag | discrimination_descriptor
+#'
+#' @examples
+#' flag_tbl <- assessor_flag_summary(perf)
+assessor_flag_summary <- function(perf) {
+
+  # ── Agreement: mean r per assessor ─────────────────────────────────────────
+  agree <- perf$agreement %>%
+    group_by(Assessor) %>%
+    summarise(mean_r = mean(r, na.rm = TRUE), .groups = "drop") %>%
+    mutate(
+      agreement_flag       = .add_flags("agreement", mean_r)$flag,
+      agreement_descriptor = .add_flags("agreement", mean_r)$descriptor
+    )
+
+  # ── Repeatability: mean CV% per assessor (averaged across sample×attribute)
+  rep <- perf$repeatability %>%
+    group_by(Assessor) %>%
+    summarise(mean_cv = mean(cv_pct, na.rm = TRUE), .groups = "drop") %>%
+    mutate(
+      repeatability_flag       = .add_flags("repeatability_cv", mean_cv)$flag,
+      repeatability_descriptor = .add_flags("repeatability_cv", mean_cv)$descriptor
+    )
+
+  # ── Discrimination: % attributes with significant F per assessor ────────────
+  disc <- perf$discrimination %>%
+    group_by(Assessor) %>%
+    summarise(
+      pct_sig_disc = 100 * mean(p_value < 0.05, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      # Flag on % significant: invert the discrimination domain —
+      # high pct_sig = good, so we flag on (100 - pct_sig) as a proxy p-value
+      # scaled to [0,1]. Simpler: apply thresholds directly.
+      discrimination_flag = case_when(
+        pct_sig_disc >= 50  ~ "\U1F7E2",
+        pct_sig_disc >= 25  ~ "\U1F7E1",
+        TRUE                ~ "\U1F534"
+      ),
+      discrimination_descriptor = case_when(
+        pct_sig_disc >= 50  ~ "Discriminates reliably on majority of attributes",
+        pct_sig_disc >= 25  ~ "Marginal discrimination \u2014 monitor",
+        TRUE                ~ "Poor discrimination \u2014 cannot distinguish samples"
+      )
+    )
+
+  # ── Join all three domains ─────────────────────────────────────────────────
+  agree %>%
+    left_join(rep,  by = "Assessor") %>%
+    left_join(disc, by = "Assessor") %>%
+    select(
+      Assessor,
+      mean_r, agreement_flag, agreement_descriptor,
+      mean_cv, repeatability_flag, repeatability_descriptor,
+      pct_sig_disc, discrimination_flag, discrimination_descriptor
+    )
 }
 
 
