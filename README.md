@@ -34,13 +34,14 @@ PanelCheck/
 │
 └── R/                          # R translation of PanelCheck analyses
     ├── 00_load_data.R          # Data loading and validation
-    ├── 01_panel_performance.R  # ANOVA-based panel performance stats
+    ├── 01_panel_performance.R  # ANOVA-based panel performance stats + QC flags
     ├── 02_profile_plots.R      # Profile plots per assessor per attribute
     ├── 03_mixed_model.R        # Mixed model ANOVA + Tukey HSD + variance components
     ├── 04_pca.R                # PCA consensus analysis (biplot, scree, loadings)
     ├── 05_fvalue_overview.R    # F-value overview plots across all attributes
-    ├── run_all.R               # Master script — runs all analyses on a dataset
-    └── utils.R                 # Shared helper functions
+    ├── run_all.R               # Master script — runs all analyses on a single dataset
+    ├── run_batch.R             # Batch script — loops run_all.R over multiple datasets
+    └── utils.R                 # Shared helpers · QC flag thresholds · skip-log system
 ```
 
 ---
@@ -178,11 +179,141 @@ write_xlsx(panel_data, "data/my_panel_data.xlsx")
 
 | Script | Analysis |
 |---|---|
-| `01_panel_performance.R` | Descriptive stats · 2-way ANOVA (Type III) · assessor discrimination · repeatability · agreement |
+| `01_panel_performance.R` | Descriptive stats · 3-way ANOVA (Type III SS) · assessor discrimination · repeatability · agreement · QC flags |
 | `02_profile_plots.R` | Per-assessor profiles vs. panel mean · spider chart |
-| `03_mixed_model.R` | Mixed model ANOVA · Tukey HSD · variance components |
+| `03_mixed_model.R` | Mixed model ANOVA · Tukey HSD · variance components · variance component flags |
 | `04_pca.R` | Consensus PCA biplot · scree plot · variable loadings |
 | `05_fvalue_overview.R` | F-value heatmap · dotplot · p-value heatmap · discrimination bars |
+
+---
+
+### Batch Processing
+
+`run_batch.R` loops `run_all.R` over a list of datasets, saving plots and results to a dedicated sub-folder per dataset. Use this when you have multiple panels or conditions stored as separate `.xlsx` files in the same directory.
+
+**Configure the batch settings at the top of `run_batch.R`:**
+
+```r
+# Directory containing all input .xlsx files; output sub-folders are created here
+BASE_DIR <- "../../panel_check_results"
+
+# Dataset names — each must match a file named <name>.xlsx in BASE_DIR
+sensory_sets <- c(
+  "study1_qda",
+  "study1_dfc",
+  "study2_qda"
+)
+
+SAVE_PLOTS  <- TRUE   # Write PNG plots for every dataset
+SAVE_TABLES <- TRUE   # Write PanelCheck_results.xlsx for every dataset
+```
+
+**Output structure:**
+
+```
+panel_check_results/
+├── study1_qda.xlsx          ← input
+├── study1_qda/              ← results (auto-created)
+│   ├── PanelCheck_results.xlsx
+│   ├── fvalue_heatmap.png
+│   └── ...
+├── study1_dfc.xlsx
+├── study1_dfc/
+│   └── ...
+└── ...
+```
+
+**Run the batch:**
+
+```r
+setwd("path/to/PanelCheck/R")
+source("run_batch.R")
+```
+
+A summary is printed on completion showing which datasets completed and which were skipped:
+
+```
+════════════════════════════════════════
+ Batch complete: 2 / 3 datasets
+  Completed: study1_qda, study1_dfc
+  Skipped:   study2_qda
+════════════════════════════════════════
+```
+
+Datasets are skipped — without stopping the batch — if the input file is missing or if `run_all.R` encounters a fatal error. Per-step errors within each dataset are handled by the skip-log system (see Error Handling below).
+
+> **Note:** `run_all.R` can still be run directly on a single dataset. The `if(!exists())` guards at the top of `run_all.R` ensure that settings set by `run_batch.R` take priority, while standalone runs fall back to the default values defined in `run_all.R`.
+
+---
+
+### Performance Flags
+
+All assessor-level performance tables include automated QC flags that highlight results requiring attention. Flags are computed independently for each domain — no composite score is produced.
+
+#### Flag tiers
+
+| Flag | Tier | Meaning |
+|---|---|---|
+| 🟢 | PASS | Meets accepted thresholds — no action required |
+| 🟡 | MONITOR | Marginal — flag for review or retraining |
+| 🔴 | CONCERN | Outside accepted thresholds — consider exclusion or retraining |
+| ⬜ | Insufficient data | Cannot be evaluated |
+
+#### Flagged domains
+
+| Domain | Statistic | Table |
+|---|---|---|
+| **Agreement** | Pearson r with panel mean | Assessor Agreement |
+| **Discrimination** | p-value from one-way ANOVA (Sample effect) | Discrimination, Repeatability ANOVA |
+| **Repeatability** | CV% across replicates | — |
+| **Session consistency** | p-value for Replicate effect in repeatability ANOVA | Repeatability ANOVA |
+| **Assessor scale bias** | Assessor variance as % of total (mixed model) | Random Effects |
+| **Panel consensus** | Assessor:Sample / Residual variance ratio | Random Effects |
+
+#### Updating the thresholds
+
+All thresholds are stored in a single `FLAG_THRESHOLDS` list at the top of the flagging section in `R/utils.R`. Edit the values there to reflect your panel context, product category, or institutional SOPs — no other files need to change.
+
+```r
+FLAG_THRESHOLDS <- list(
+
+  agreement = list(
+    pass    = 0.80,   # r ≥ 0.80  → 🟢 PASS
+    monitor = 0.60    # r ≥ 0.60  → 🟡 MONITOR, else 🔴 CONCERN
+  ),
+
+  discrimination = list(
+    pass    = 0.05,   # p < 0.05  → 🟢 PASS
+    monitor = 0.10    # p < 0.10  → 🟡 MONITOR, else 🔴 CONCERN
+  ),
+
+  repeatability_cv = list(
+    pass    = 20,     # CV < 20%  → 🟢 PASS
+    monitor = 40      # CV < 40%  → 🟡 MONITOR, else 🔴 CONCERN
+  ),
+
+  vc_as_ratio = list(
+    concern_low = 1.0,  # ratio < 1.0 → 🔴 (residual exceeds signal)
+    pass        = 1.5,  # ratio ≤ 1.5 → 🟢 PASS
+    monitor     = 2.0   # ratio ≤ 2.0 → 🟡 MONITOR, else 🔴 CONCERN
+  ),
+
+  vc_assessor_pct = list(
+    pass    = 25,     # Assessor% < 25% → 🟢 PASS (low scale bias)
+    monitor = 40      # Assessor% < 40% → 🟡 MONITOR, else 🔴 CONCERN
+  ),
+
+  vc_replicate_pct = list(
+    pass     = 5,     # Assessor:Replicate% < 5%  → 🟢 PASS
+    monitor  = 10,    # Assessor:Replicate% < 10% → 🟡 MONITOR, else 🔴 CONCERN
+    zero_tol = 1e-6   # Near-zero variance         → 🟡 (possible memory effect)
+  )
+)
+```
+
+Flag logic is applied by `apply_flag(domain, value)` in `utils.R`. The function handles edge cases including negative correlation values (agreement), inverted p-value interpretation (Replicate effect), and near-zero variance.
+
+> **Note on thresholds:** Cutoffs are based on general guidelines in sensory science. Treat them as starting points.
 
 ### Error Handling
 

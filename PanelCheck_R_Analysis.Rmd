@@ -9,11 +9,16 @@ output:
       collapsed: false
       smooth_scroll: true
     toc_depth: 3
-    theme: flatly
+    theme: cosmo
     highlight: tango
     code_folding: hide
     df_print: paged
     css: css/style.css
+    fig_width: 9
+    fig_height: 5
+    fig_caption: true
+    number_sections: true       
+    self_contained: true       
     includes:
       in_header: css/header.html
       after_body: css/external-links-js.html

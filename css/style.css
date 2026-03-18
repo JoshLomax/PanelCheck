@@ -1,11 +1,113 @@
-.main-container {
-    max-width: 1200px !important;
-  }
-html {
-  font-size: 14px;
+/* Typography */
+body {
+  font-family: 'Inter', 'Segoe UI', sans-serif;
+  font-size: 15px;
+  line-height: 1.7;
+  color: #2c2c2c;
 }
-.scroll-100 {
-  max-width: 100%;
-  overflow-x: auto;
-  white-space: nowrap;
+
+/* Headings */
+h1, h2, h3 { font-weight: 600; color: #1a1a2e; }
+h1 { border-bottom: 2px solid #3498db; padding-bottom: 8px; }
+h2 { border-bottom: 1px solid #eee; padding-bottom: 4px; }
+
+/* TOC styling */
+#TOC {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 16px;
+  border-left: 4px solid #3498db;
+  font-size: 13px;
+}
+
+/* Code blocks */
+pre {
+  background: #f4f6f8;
+  border-radius: 6px;
+  border-left: 4px solid #3498db;
+  font-size: 13px;
+}
+
+/* Paged tables */
+.pagedtable-wrapper {
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+  overflow: hidden;
+}
+
+/* Callout boxes — use in Rmd as <div class="callout"> */
+.callout {
+  background: #eaf4fb;
+  border-left: 4px solid #3498db;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+
+.callout-warning {
+  background: #fef9e7;
+  border-left: 4px solid #f39c12;
+  border-radius: 4px;
+  padding: 12px 16px;
+  margin: 16px 0;
+}
+
+/* Figure captions */
+.figure { text-align: center; }
+.caption { color: #666; font-size: 13px; font-style: italic; }
+
+/* Better spacing */
+.main-container { max-width: 1100px; }
+p { margin-bottom: 1.1em; }
+
+/* TOC column — let Bootstrap handle the width */
+.col-md-3 {
+  display: flex;
+  justify-content: center;
+  padding: 0;
+  min-width: 220px;         
+}
+
+#TOC {
+  background: transparent;
+  border-radius: 0;
+  border-left: none;
+  padding: 8px 0;
+  width: fit-content;
+  top: 20px;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+/* TOC links */
+#TOC a {
+  color: #ccc;
+  padding: 8px 16px;
+  display: block;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+#TOC a:hover {
+  color: #fff;
+  background: #2c2c4a;
+}
+
+/* Active/selected item */
+#TOC a.active {
+  color: #fff;
+  background: #2c3e6b;
+  font-weight: 600;
+}
+
+/* Main content — remove fixed margin, let Bootstrap grid handle spacing */
+.col-md-9 {
+  padding-left: 24px;     
+  flex: 1;                   
+}
+
+/* Ensure the row uses flexbox so columns size together */
+.row {
+  display: flex;
+  align-items: flex-start;
 }
